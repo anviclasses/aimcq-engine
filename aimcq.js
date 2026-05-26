@@ -76,9 +76,27 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
         shuffle_options: false,
         quiz_questions: 0,         // 0 = all questions; >0 = limit for quiz mode only
         reload_after: 0,           // 0 = disabled; 1/3/7/15 = reload page after X answered questions
-        topic_order: null          // optional array of topic names/slugs to force a custom topic sequence;
+        topic_order: null,         // optional array of topic names/slugs to force a custom topic sequence;
                                    // e.g. ['General Intelligence','General Knowledge','Quantitative Aptitude','English Language']
                                    // Topics not listed keep their source-order position (appended at the end).
+
+        // ---- EXAM INTERFACE EXECUTION SETTING --------------------------------
+        // Chooses which exam UI is used when the quiz actually runs.
+        //   'basic'        → the original lightweight in-page quiz interface
+        //                    (start panel + scoped layout, NOT full-screen).
+        //   'professional' → the SSC-style full-screen "Computer Based Test"
+        //                    interface ported from the AI MCQs Exam Maker
+        //                    plugin: fullscreen overlay, question palette,
+        //                    section tabs, instructions screen, declaration
+        //                    checkbox, top timer bar and bottom action bar.
+        // Works identically for all three embedding methods (inline JSON,
+        // single remote JSON, merged multi-file).
+        exam_interface: 'basic',
+
+        // ---- Professional-interface scoring (only used when
+        //      exam_interface === 'professional' and NOT in revision mode) ----
+        marks_per_question: 1,     // marks awarded per correct answer
+        negative_marks: 0          // marks deducted per wrong answer (0 = none)
     };
 
     var S = Object.assign({}, defaultSettings, customSettings);
@@ -1806,6 +1824,48 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
             return restored.length > 0 ? restored : questions;
         }
 
+        /* ================================================================
+           PROFESSIONAL EXAM INTERFACE BRANCH
+           ----------------------------------------------------------------
+           When the website passes  exam_interface: 'professional'  in its
+           settings, the quiz runs inside the SSC-style full-screen CBT
+           interface instead of the basic in-page one. This branch:
+             1. Renders a lightweight mode-picker (Quiz Mode / Revision Mode)
+                using the SAME start panel markup as the basic interface, so
+                websites get a consistent "choose your mode" experience.
+             2. On mode selection, prepares the question set for that mode
+                and hands it to window.initAimcqProExam(), which paints the
+                full professional CBT UI (start screen → exam → results).
+           This applies uniformly to all three embedding methods because
+           loadAimcqFromDrive() funnels through initAimcqQuiz().
+           ================================================================ */
+        if (S.exam_interface === 'professional' && typeof window.initAimcqProExam === 'function') {
+            var launchPro = function(mode) {
+                // Revision mode mirrors the basic engine: instant feedback,
+                // single-question display, no timer. initAimcqProExam reads
+                // these to decide exam_type === 'revision'.
+                var proS = Object.assign({}, S);
+                if (mode === 'revision') {
+                    proS.feedback_mode = 'instant';
+                    proS.display_mode  = 'single';
+                    proS.timer         = 0;
+                }
+                var activeQs = prepareQuestions(mode);
+                // initAimcqProExam fully repaints `container` with the pro UI.
+                window.initAimcqProExam(containerId, proS, activeQs, passageData, _quizFingerprint);
+            };
+
+            var proStartBtns = document.querySelectorAll('#aq-start-' + containerId + ' .aq-start-btn');
+            proStartBtns.forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    launchPro(this.dataset.mode === 'revision' ? 'revision' : 'exam');
+                });
+            });
+            // Professional interface manages its own session persistence
+            // (localStorage) inside initAimcqProExam — nothing more to wire here.
+            return;
+        }
+
         // Check for saved session state and auto-restore
         // Migration: remove any old-format key (without fingerprint) to prevent stale cross-post collisions
         try {
@@ -2034,4 +2094,1223 @@ window.loadAimcqFromDrive = function(containerId, opts) {
         container.id = containerId;
         window.initAimcqQuiz(containerId, merged, opts.settings || {});
     }).catch(function() { renderSleep(); });
+};
+
+
+/* ==================================================================
+   PROFESSIONAL CBT EXAM INTERFACE  —  initAimcqProExam(...)
+   ==================================================================
+   A self-contained, SSC-style "Computer Based Test" exam interface,
+   ported 1:1 from the AI MCQs Exam Maker WordPress plugin.
+
+   Features (identical to the plugin):
+     - Full-screen exam overlay (fixed, z-index 999999)
+     - Professional start screen with bilingual instructions,
+       exam summary card, palette legend demo and an
+       "I agree" declaration checkbox.
+     - Top bar with title + live countdown timer.
+     - Left SSC question-palette panel:
+         * Not Visited / Not Answered / Answered /
+           Marked for Review / Answered & Marked counters
+         * section tabs (one per topic) when the quiz has >= 2 topics
+         * jump-to-question grid
+         * Submit Exam button
+     - Right question area with passage display, language switcher,
+       lettered options, explanations.
+     - Bottom action bar: Mark for Review / Clear Response /
+       Check Answer (instant) / Save & Next.
+     - Mobile floating nav-toggle + slide-in drawer.
+     - localStorage session persistence (resume an unfinished exam).
+     - KaTeX maths + SmilesDrawer chemistry rendering.
+     - Results screen with score table (or revision summary).
+
+   It is driven by the SAME prepared question objects the basic
+   engine builds, so all three embedding methods (inline JSON /
+   single remote JSON / merged multi-file) can use it simply by
+   passing  exam_interface: 'professional'  in their settings.
+
+   This function is invoked internally by initAimcqQuiz() — websites
+   never need to call it directly.
+
+   Arguments:
+     containerId  - the id of the host <div>
+     S            - merged settings object (from initAimcqQuiz)
+     qs           - prepared & ordered question array
+     pdata        - passage-data map  { passageId: {en:{title,content}, hi:{...}} }
+     fingerprint  - per-quiz content fingerprint (for storage key)
+   ================================================================== */
+window.initAimcqProExam = function(containerId, S, qs, pdata, fingerprint) {
+
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    pdata = pdata || {};
+    qs = qs || [];
+
+    /* ---- map engine settings -> plugin-style settings -------------- */
+    // The plugin's ExamRunner reads: exam_type, feedback_mode, timer,
+    // shuffle_options, show_explanation, marks_per_question, negative_marks.
+    var isRevision = (S.feedback_mode === 'instant' && (!S.timer || S.timer === 0));
+    var examType   = isRevision ? 'revision' : 'standard';
+    var examId     = (containerId + '-' + (fingerprint || 'x')).replace(/[^A-Za-z0-9_-]/g, '_');
+
+    var settings = {
+        exam_type:          examType,
+        feedback_mode:      S.feedback_mode || 'end_of_exam',
+        timer:              S.timer || 0,
+        shuffle_options:    !!S.shuffle_options,
+        show_explanation:   S.show_explanation !== false,
+        marks_per_question: (S.marks_per_question != null) ? S.marks_per_question : 1,
+        negative_marks:     (S.negative_marks != null) ? S.negative_marks : 0,
+        title:              S.title || 'Exam',
+        description:        S.description || ''
+    };
+
+    /* ---- helpers --------------------------------------------------- */
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function slugSafe(s) { return String(s || 'all').replace(/[^A-Za-z0-9_-]/g, '_'); }
+
+    // Smooth-scroll an element to a vertical offset, tolerating environments
+    // (older browsers, some embedded webviews) where Element.scrollTo() is
+    // missing — falls back to setting scrollTop directly.
+    function safeScrollTo(el, top) {
+        if (!el) return;
+        try {
+            if (typeof el.scrollTo === 'function') {
+                el.scrollTo({ top: top, behavior: 'smooth' });
+            } else {
+                el.scrollTop = top;
+            }
+        } catch (e) {
+            try { el.scrollTop = top; } catch (e2) {}
+        }
+    }
+
+    /* ---- build section list from question topics ------------------- */
+    // section_id is derived from each question's topic slug. When the quiz
+    // has >= 2 distinct topics we show section tabs (plus an "All" tab).
+    var sectionsMap = {}, sectionOrder = [];
+    qs.forEach(function(q) {
+        var t = q.topic || { slug: 'general', name: 'General' };
+        var sid = slugSafe(t.slug || 'general');
+        if (!sectionsMap[sid]) {
+            sectionsMap[sid] = { id: sid, title: t.name || t.slug || 'General', count: 0 };
+            sectionOrder.push(sid);
+        }
+        sectionsMap[sid].count++;
+        q._section_id = sid;
+    });
+    var showSections = sectionOrder.length > 1;
+    var sectionsData = [];
+    if (showSections) {
+        sectionsData.push({ id: 'all', title: 'All Sections' });
+        sectionOrder.forEach(function(sid) {
+            sectionsData.push({ id: sid, title: sectionsMap[sid].title });
+        });
+    }
+
+    /* ---- normalise questions into the shape the runner expects ----- */
+    // Engine question objects already carry en/hi/options/correct/etc.
+    var questionsForJs = qs.map(function(q, idx) {
+        return {
+            id:                  q.id != null ? q.id : idx,
+            is_passage_question: !!q.is_passage_question,
+            passage_id:          q.passage_id || 0,
+            correct:             (q.correct || []).map(String),
+            image_width:         q.image_width || 0,
+            image_height:        q.image_height || 0,
+            section_id:          q._section_id,
+            en:                  q.en || { content: '', options: [], explanation: '' },
+            hi:                  q.hi || { content: '', options: [], explanation: '' }
+        };
+    });
+
+    /* ---- group questions by passage (passage box rendered once) ---- */
+    var questionGroups = [];   // [{passageKey, questions:[...]}]
+    var groupIndex = {};
+    questionsForJs.forEach(function(qd) {
+        var key = (qd.is_passage_question && qd.passage_id) ? ('p' + qd.passage_id) : 'standalone';
+        if (key === 'standalone') {
+            questionGroups.push({ passageKey: 'standalone', questions: [qd] });
+        } else {
+            if (groupIndex[key] == null) {
+                groupIndex[key] = questionGroups.length;
+                questionGroups.push({ passageKey: key, questions: [] });
+            }
+            questionGroups[groupIndex[key]].questions.push(qd);
+        }
+    });
+
+    /* ================================================================
+       1. BUILD THE HTML  (mirrors the plugin's PHP-rendered markup)
+       ================================================================ */
+    function buildHTML() {
+        var negTxt = parseFloat(settings.negative_marks) > 0
+            ? '-' + parseFloat(settings.negative_marks)
+            : 'No Negative Marking';
+
+        /* --- start-screen summary --- */
+        var summaryHTML;
+        if (settings.exam_type === 'revision') {
+            summaryHTML =
+                '<div class="cbt-summary-item"><strong>Total Questions</strong>' + questionsForJs.length + '</div>'
+              + '<div class="cbt-summary-item"><strong>Mode</strong>Practice / Revision</div>'
+              + '<div class="cbt-summary-item"><strong>Duration</strong>Untimed</div>'
+              + '<div class="cbt-summary-item"><strong>Feedback</strong>Instant Verification</div>';
+        } else {
+            summaryHTML =
+                '<div class="cbt-summary-item"><strong>Total Questions</strong>' + questionsForJs.length + '</div>'
+              + '<div class="cbt-summary-item"><strong>Duration</strong>' + (settings.timer > 0 ? settings.timer + ' Minutes' : 'Untimed') + '</div>'
+              + '<div class="cbt-summary-item"><strong>Correct Answer</strong>+' + parseFloat(settings.marks_per_question) + '</div>'
+              + '<div class="cbt-summary-item"><strong>Negative Marking</strong>' + negTxt + '</div>';
+        }
+
+        /* --- instructions (EN + HI) --- */
+        var instEN, instHI;
+        if (settings.exam_type === 'revision') {
+            instEN =
+                '<h3>Revision Instructions</h3>'
+              + '<p>Please read the following instructions carefully before starting the revision:</p>'
+              + '<ol>'
+              + '<li>This is a practice mode designed for revision. There is no time limit.</li>'
+              + '<li>You can check your answer instantly by clicking the <strong>Check Answer</strong> button below the question.</li>'
+              + '<li>Detailed explanations for the questions (if available) will be displayed once you verify your answer.</li>'
+              + '<li>There is no negative marking or final score penalty in this mode.</li>'
+              + '<li>The Question Palette displayed on the left side of the screen will show the status of each question.</li>'
+              + '<li>Click on the <strong>Question Number</strong> in the Question Palette to jump to that question directly.</li>'
+              + '</ol><h4>Question Palette Legend:</h4>';
+            instHI =
+                '<h3>रिवीजन निर्देश</h3>'
+              + '<p>कृपया अपना रिवीजन शुरू करने से पहले निम्नलिखित निर्देशों को ध्यान से पढ़ें:</p>'
+              + '<ol>'
+              + '<li>यह अभ्यास के लिए डिज़ाइन किया गया एक रिवीजन मोड है। इसमें कोई समय सीमा नहीं है।</li>'
+              + '<li>आप प्रश्न के नीचे दिए गए <strong>Check Answer</strong> बटन पर क्लिक करके तुरंत अपने उत्तर की जांच कर सकते हैं।</li>'
+              + '<li>अपना उत्तर जांचने के बाद प्रश्नों के विस्तृत स्पष्टीकरण (यदि उपलब्ध हों) प्रदर्शित किए जाएंगे।</li>'
+              + '<li>इस मोड में कोई नेगेटिव मार्किंग या अंतिम स्कोर पेनाल्टी नहीं है।</li>'
+              + '<li>स्क्रीन के बाईं ओर प्रदर्शित प्रश्न पैलेट प्रत्येक प्रश्न की स्थिति दिखाएगा।</li>'
+              + '<li>उस प्रश्न पर सीधे जाने के लिए प्रश्न पैलेट में <strong>प्रश्न संख्या</strong> पर क्लिक करें।</li>'
+              + '</ol><h4>प्रश्न पैलेट लेजेंड (Legend):</h4>';
+        } else {
+            var mq = parseFloat(settings.marks_per_question);
+            var nm = parseFloat(settings.negative_marks);
+            var negClauseEN = nm > 0
+                ? ', and each incorrect answer carries a penalty of <strong>-' + nm + '</strong> marks'
+                : '. There is <strong>NO negative marking</strong> for incorrect answers';
+            var negClauseHI = nm > 0
+                ? ', और प्रत्येक गलत उत्तर के लिए <strong>-' + nm + '</strong> अंकों की नेगेटिव मार्किंग है'
+                : '। गलत उत्तरों के लिए <strong>कोई नेगेटिव मार्किंग नहीं</strong> है';
+            var evalMarksEN = nm > 0 ? ' or -' + nm : ' or 0';
+            instEN =
+                '<h3>General Instructions</h3>'
+              + '<p>Please read the following instructions carefully before starting the examination:</p>'
+              + '<ol>'
+              + '<li>The countdown timer at the top right corner of the screen will display the remaining time available for you to complete the examination. When the timer reaches zero, the examination will end automatically.</li>'
+              + '<li>Each correct answer will be awarded <strong>+' + mq + '</strong> marks' + negClauseEN + '.</li>'
+              + '<li>Unanswered questions will receive <strong>0</strong> marks. Questions marked for review <strong>WITHOUT</strong> selecting an option will also not be evaluated and will receive <strong>0</strong> marks.</li>'
+              + '<li>Questions that are <strong>ANSWERED</strong> and marked for review will be considered for final evaluation and will receive marks (+' + mq + evalMarksEN + ') accordingly.</li>'
+              + '<li>The Question Palette displayed on the left side of the screen will show the status of each question.</li>'
+              + '<li>Click on the <strong>Question Number</strong> in the Question Palette to go to that question directly.</li>'
+              + '<li>To save your answer, you MUST click on the <strong>Save &amp; Next</strong> button.</li>'
+              + '<li>To mark a question for review, click on the <strong>Mark for Review</strong> button.</li>'
+              + '<li>To change your answer to a question that has already been answered, first select that question for answering and then click on the <strong>Clear Response</strong> button.</li>'
+              + '</ol><h4>Question Palette Legend:</h4>';
+            instHI =
+                '<h3>सामान्य निर्देश</h3>'
+              + '<p>कृपया परीक्षा शुरू करने से पहले निम्नलिखित निर्देशों को ध्यान से पढ़ें:</p>'
+              + '<ol>'
+              + '<li>स्क्रीन के ऊपरी दाएं कोने में काउंटडाउन टाइमर परीक्षा पूरी करने के लिए आपके पास शेष समय प्रदर्शित करेगा। टाइमर शून्य होने पर, परीक्षा स्वतः समाप्त हो जाएगी।</li>'
+              + '<li>प्रत्येक सही उत्तर के लिए <strong>+' + mq + '</strong> अंक दिए जाएंगे' + negClauseHI + '।</li>'
+              + '<li>अनुत्तरित (Unanswered) प्रश्नों को <strong>0</strong> अंक मिलेंगे। बिना कोई विकल्प चुने समीक्षा के लिए चिह्नित किए गए प्रश्नों का मूल्यांकन नहीं किया जाएगा।</li>'
+              + '<li>जिन प्रश्नों का <strong>उत्तर दिया गया है</strong> और समीक्षा के लिए चिह्नित किया गया है, उनका अंतिम मूल्यांकन किया जाएगा।</li>'
+              + '<li>स्क्रीन के बाईं ओर प्रदर्शित प्रश्न पैलेट प्रत्येक प्रश्न की स्थिति दिखाएगा।</li>'
+              + '<li>उस प्रश्न पर सीधे जाने के लिए प्रश्न पैलेट में <strong>प्रश्न संख्या</strong> पर क्लिक करें।</li>'
+              + '<li>अपना उत्तर सहेजने के लिए, आपको <strong>Save &amp; Next</strong> बटन पर क्लिक करना होगा।</li>'
+              + '<li>समीक्षा के लिए किसी प्रश्न को चिह्नित करने के लिए, <strong>Mark for Review</strong> बटन पर क्लिक करें।</li>'
+              + '<li>पहले से उत्तर दिए गए प्रश्न का उत्तर बदलने के लिए, पहले उस प्रश्न को चुनें और फिर <strong>Clear Response</strong> बटन पर क्लिक करें।</li>'
+              + '</ol><h4>प्रश्न पैलेट लेजेंड (Legend):</h4>';
+        }
+
+        /* --- palette legend demo --- */
+        var demoHTML =
+            '<div class="cbt-palette-demo">'
+          + '<div class="cbt-demo-item"><span class="cbt-demo-icon icon-not-visited">1</span>'
+          +   '<span class="inst-en-inline">You have not visited the question yet.</span>'
+          +   '<span class="inst-hi-inline" style="display:none;">आपने अभी तक प्रश्न पर विजिट नहीं किया है।</span></div>'
+          + '<div class="cbt-demo-item"><span class="cbt-demo-icon icon-unanswered">2</span>'
+          +   '<span class="inst-en-inline">You have not answered the question.</span>'
+          +   '<span class="inst-hi-inline" style="display:none;">आपने प्रश्न का उत्तर नहीं दिया है।</span></div>'
+          + '<div class="cbt-demo-item"><span class="cbt-demo-icon icon-answered">3</span>'
+          +   '<span class="inst-en-inline">You have answered the question.</span>'
+          +   '<span class="inst-hi-inline" style="display:none;">आपने प्रश्न का उत्तर दिया है।</span></div>'
+          + (settings.exam_type !== 'revision'
+                ? '<div class="cbt-demo-item"><span class="cbt-demo-icon icon-review">4</span>'
+                +   '<span class="inst-en-inline">Not answered, but marked for review.</span>'
+                +   '<span class="inst-hi-inline" style="display:none;">उत्तर नहीं दिया, लेकिन समीक्षा के लिए चिह्नित।</span></div>'
+                + '<div class="cbt-demo-item"><span class="cbt-demo-icon icon-answered-review">5</span>'
+                +   '<span class="inst-en-inline">Answered and marked for review. (Will be evaluated).</span>'
+                +   '<span class="inst-hi-inline" style="display:none;">उत्तर दिया और समीक्षा के लिए चिह्नित। (मूल्यांकन होगा)।</span></div>'
+                : '')
+          + '</div>';
+
+        var descHTML = settings.description
+            ? '<h4 class="inst-en">Specific Instructions for this Exam:</h4>'
+            + '<h4 class="inst-hi" style="display:none;">इस परीक्षा के लिए विशिष्ट निर्देश:</h4>'
+            + '<div class="exam-description" style="margin-top:10px;">' + settings.description + '</div>'
+            : '';
+
+        /* --- start screen --- */
+        var startScreen =
+            '<div class="aimcq-start-screen">'
+          + '<div class="cbt-start-header"><h2>' + esc(settings.title) + '</h2></div>'
+          + '<div class="cbt-content-area">'
+          + '<div class="cbt-lang-select-container">'
+          +   '<label for="instructions-lang-' + examId + '"><strong>View Instructions In:</strong> </label>'
+          +   '<select id="instructions-lang-' + examId + '" class="cbt-lang-select">'
+          +     '<option value="en">English</option><option value="hi">हिंदी</option>'
+          +   '</select>'
+          + '</div>'
+          + '<div class="cbt-exam-summary">' + summaryHTML + '</div>'
+          + '<div class="cbt-instructions-box">'
+          +   '<div class="inst-en">' + instEN + '</div>'
+          +   '<div class="inst-hi" style="display:none;">' + instHI + '</div>'
+          +   demoHTML + descHTML
+          + '</div>'
+          + '<div class="cbt-declaration"><label>'
+          +   '<input type="checkbox" id="aimcq-agree-checkbox-' + examId + '">'
+          +   '<span class="inst-en-inline">I have read and understood all the instructions carefully. I agree that in case I do not adhere to the instructions, I will be held responsible and may face disqualification. I am ready to begin the test.</span>'
+          +   '<span class="inst-hi-inline" style="display:none;">मैंने सभी निर्देशों को ध्यान से पढ़ और समझ लिया है। मैं सहमत हूं कि निर्देशों का पालन न करने पर मुझे जिम्मेदार ठहराया जाएगा। मैं परीक्षा शुरू करने के लिए तैयार हूं।</span>'
+          + '</label></div>'
+          + '<div class="cbt-action-bar">'
+          +   '<button type="button" class="aimcq-start-btn" id="aimcq-start-btn-' + examId + '" disabled>I am ready to begin</button>'
+          + '</div>'
+          + '</div></div>';
+
+        /* --- top bar --- */
+        var topBar =
+            '<div class="aimcq-top-bar"><h2>' + esc(settings.title) + '</h2>'
+          + (settings.timer > 0
+                ? '<div class="aimcq-timer-container">Time Left: '
+                + '<span class="aimcq-timer" id="aimcq-timer-' + examId + '">--:--</span></div>'
+                : '')
+          + '</div>';
+
+        /* --- legend (palette panel) --- */
+        var legend =
+            '<div class="aimcq-legend">'
+          + '<div class="aimcq-legend-item"><span class="aimcq-legend-icon icon-not-visited" data-count="not-visited">0</span> Not Visited</div>'
+          + '<div class="aimcq-legend-item"><span class="aimcq-legend-icon icon-unanswered" data-count="unanswered">0</span> Not Answered</div>'
+          + '<div class="aimcq-legend-item"><span class="aimcq-legend-icon icon-answered" data-count="answered">0</span> Answered</div>'
+          + (settings.exam_type !== 'revision'
+                ? '<div class="aimcq-legend-item"><span class="aimcq-legend-icon icon-review" data-count="review">0</span> Marked for Review</div>'
+                + '<div class="aimcq-legend-item" style="grid-column:span 2;"><span class="aimcq-legend-icon icon-answered-review" data-count="answered-review">0</span> Answered &amp; Marked for Review</div>'
+                : '')
+          + '</div>';
+
+        /* --- section tabs --- */
+        var sectionTabs = '';
+        if (showSections) {
+            sectionTabs = '<div class="aimcq-section-tabs">'
+                + sectionsData.map(function(sec) {
+                    return '<button type="button" class="aimcq-section-tab' + (sec.id === 'all' ? ' active' : '')
+                        + '" data-section-target="' + esc(sec.id) + '">' + esc(sec.title) + '</button>';
+                }).join('')
+                + '</div>';
+        }
+
+        /* --- nav grid --- */
+        var navGrid = '<div class="aimcq-nav-grid">'
+            + questionsForJs.map(function(qd, idx) {
+                return '<button type="button" class="aimcq-q-btn q-not-visited" data-q-index="' + idx
+                    + '" data-section="' + esc(qd.section_id) + '">' + (idx + 1) + '</button>';
+            }).join('')
+            + '</div>';
+
+        var navPanel =
+            '<div class="aimcq-nav-panel">' + legend + sectionTabs
+          + '<h4>' + (showSections ? 'Questions' : 'Section') + '</h4>'
+          + navGrid
+          + '<button type="button" class="aimcq-btn-submit-exam" data-action="submit-nav">Submit Exam</button>'
+          + '</div>';
+
+        /* --- questions + passages --- */
+        var qaHTML = '';
+        questionGroups.forEach(function(group) {
+            if (group.passageKey !== 'standalone') {
+                var pid = group.passageKey.slice(1);
+                var pd = pdata[pid] || pdata[Number(pid)];
+                if (pd) {
+                    var enT = (pd.en && pd.en.title) || '';
+                    var hiT = (pd.hi && pd.hi.title) || enT;
+                    var enC = (pd.en && pd.en.content) || '';
+                    var hiC = (pd.hi && pd.hi.content) || enC;
+                    qaHTML +=
+                        '<div class="aimcq-passage-display" id="passage-display-' + slugSafe(group.passageKey)
+                        + '" data-passage-id="' + esc(group.passageKey) + '" style="display:none;">'
+                      + (enT ? '<h3 class="aimcq-passage-title-en">' + esc(enT) + '</h3>'
+                             + '<h3 class="aimcq-passage-title-hi" style="display:none;">' + esc(hiT) + '</h3>' : '')
+                      + '<div class="aimcq-passage-content-en">' + enC + '</div>'
+                      + '<div class="aimcq-passage-content-hi" style="display:none;">' + hiC + '</div>'
+                      + '</div>';
+                }
+            }
+            group.questions.forEach(function(qd) {
+                var globalIndex = -1;
+                for (var i = 0; i < questionsForJs.length; i++) {
+                    if (questionsForJs[i] === qd) { globalIndex = i; break; }
+                }
+                var hasEN = qd.en && qd.en.content && qd.en.content.trim() !== '';
+                var hasHI = qd.hi && qd.hi.content && qd.hi.content.trim() !== '';
+                var showLangSwitch = hasEN && hasHI;
+                var defLang = hasEN ? 'en' : 'hi';
+                var options = (qd[defLang] && qd[defLang].options) || [];
+                if (!options.length) return;
+                var isMulti = qd.correct.length > 1;
+                var imgStyle = '';
+                if (qd.image_width > 0)  imgStyle += 'width:' + qd.image_width + 'px;';
+                if (qd.image_height > 0) imgStyle += 'height:' + qd.image_height + 'px;object-fit:cover;';
+
+                var optsHTML = options.map(function(opt, oi) {
+                    var letter = String.fromCharCode(65 + oi);
+                    var o = (typeof opt === 'string') ? { text: opt, image: '' } : opt;
+                    return '<li><label>'
+                        + '<input type="' + (isMulti ? 'checkbox' : 'radio') + '" name="question_' + qd.id + '[]" value="' + oi + '">'
+                        + '<div class="aimcq-option-inner-wrap">'
+                        + '<span class="aimcq-option-label-letter">' + letter + '</span>'
+                        + (o.image ? '<img src="' + esc(o.image) + '" alt="Option image" class="aimcq-option-image" style="' + esc(imgStyle) + '">' : '')
+                        + '<div class="aimcq-option-text-content">' + (o.text || '') + '</div>'
+                        + '</div></label></li>';
+                }).join('');
+
+                var passInd = qd.is_passage_question
+                    ? '<span class="aimcq-passage-indicator" title="This question is based on the passage shown above.">'
+                    + '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>'
+                    + ' Passage Question</span>'
+                    : '';
+                var langSwitch = showLangSwitch
+                    ? '<div class="aimcq-lang-switcher">'
+                    + '<button type="button" class="aimcq-lang-btn' + (defLang === 'en' ? ' active' : '') + '" data-lang="en">English</button>'
+                    + '<button type="button" class="aimcq-lang-btn' + (defLang === 'hi' ? ' active' : '') + '" data-lang="hi">हिंदी</button>'
+                    + '</div>'
+                    : '';
+
+                qaHTML +=
+                    '<div class="aimcq-question hidden" id="question-' + qd.id + '" data-question-id="' + qd.id
+                    + '" data-question-index="' + globalIndex + '">'
+                  + '<div class="aimcq-question-header">'
+                  +   '<span class="aimcq-question-number">Question ' + (globalIndex + 1) + '.</span>'
+                  +   passInd + langSwitch
+                  + '</div>'
+                  + '<div class="aimcq-question-content-body">' + (qd[defLang].content || '') + '</div>'
+                  + '<div class="aimcq-options"><ul>' + optsHTML + '</ul></div>'
+                  + '<div class="aimcq-explanation" style="display:none;"></div>'
+                  + '</div>';
+            });
+        });
+
+        /* --- bottom bar --- */
+        var bottomBar =
+            '<div class="aimcq-bottom-bar" data-role="bottom-actions">'
+          + (settings.exam_type !== 'revision'
+                ? '<div class="aimcq-bottom-actions-left">'
+                + '<button type="button" class="aimcq-action-btn aimcq-btn-review" data-action="review">Mark for Review</button>'
+                + '<button type="button" class="aimcq-action-btn aimcq-btn-clear" data-action="clear">Clear Response</button>'
+                + '</div>'
+                : '')
+          + '<div class="aimcq-bottom-actions-right"' + (settings.exam_type === 'revision' ? ' style="width:100%;justify-content:center;"' : '') + '>'
+          + (settings.feedback_mode === 'instant'
+                ? '<button type="button" class="aimcq-action-btn aimcq-btn-submit-exam" style="width:auto;flex:1;max-width:250px;justify-content:center;" data-action="check">Check Answer</button>'
+                : '')
+          + '<button type="button" class="aimcq-action-btn aimcq-btn-save" data-action="save-next"'
+          +   (settings.exam_type === 'revision' ? ' style="flex:1;max-width:250px;justify-content:center;"' : '') + '>'
+          +   (settings.exam_type === 'revision' ? 'Next Question' : 'Save &amp; Next')
+          + '</button>'
+          + '</div></div>';
+
+        var examContainer =
+            '<div class="aimcq-exam-container">'
+          + topBar
+          + '<div class="aimcq-exam-layout">'
+          +   navPanel
+          +   '<div class="aimcq-main-content">'
+          +     '<form class="aimcq-exam-form">' + qaHTML + '</form>'
+          +     '<div class="aimcq-results" style="display:none;"></div>'
+          +   '</div>'
+          + '</div>'
+          + bottomBar
+          + '<button type="button" class="aimcq-nav-toggle-btn" aria-label="Toggle Question Navigation">'
+          +   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>'
+          + '</button>'
+          + '<div class="aimcq-nav-overlay"></div>'
+          + '</div>';
+
+        var modal =
+            '<div class="aimcq-modal-overlay" id="aimcq-modal-overlay-' + examId + '">'
+          + '<div class="aimcq-modal-dialog">'
+          + '<h3 class="aimcq-modal-title"></h3>'
+          + '<div class="aimcq-modal-body"></div>'
+          + '<div class="aimcq-modal-buttons"></div>'
+          + '</div></div>';
+
+        container.innerHTML =
+            '<div id="aimcq-pro-scope">'
+          + '<div class="aimcq-exam-wrapper" id="aimcq-exam-' + examId + '">'
+          + startScreen + examContainer + modal
+          + '</div></div>';
+    }
+
+    buildHTML();
+
+    /* ================================================================
+       2. EXAM RUNNER  (ported 1:1 from the plugin)
+       ================================================================ */
+    function ExamRunner(examId, settings, questions, passageContentData) {
+        this.examId = examId;
+        this.settings = settings;
+        this.questions = questions;
+        this.passageContentData = passageContentData;
+        this.totalQuestions = questions.length;
+        this.currentIndex = 0;
+        this.timerInterval = null;
+        this.questionStates = this.questions.map(function() {
+            return { visited: false, answered: false, review: false };
+        });
+        this.userSelections = {};
+        this.questionLanguages = this.questions.map(function(q) {
+            return (q.en && q.en.content && q.en.content.trim() !== '') ? 'en' : 'hi';
+        });
+        this.timeRemaining = this.settings.timer > 0 ? this.settings.timer * 60 : 0;
+        var currentMode = this.settings.exam_type || 'standard';
+        this.storageKey = 'aimcq_pro_state_' + this.examId + '_' + currentMode;
+        this.hasSavedState = false;
+
+        this.examWrapper   = document.getElementById('aimcq-exam-' + examId);
+        this.startScreen   = this.examWrapper.querySelector('.aimcq-start-screen');
+        this.startBtn      = document.getElementById('aimcq-start-btn-' + examId);
+        this.agreeCheckbox = document.getElementById('aimcq-agree-checkbox-' + examId);
+
+        this.examContainer   = this.examWrapper.querySelector('.aimcq-exam-container');
+        this.form            = this.examWrapper.querySelector('.aimcq-exam-form');
+        this.resultsDiv      = this.examWrapper.querySelector('.aimcq-results');
+        this.questionElements = this.examWrapper.querySelectorAll('.aimcq-question');
+
+        this.navPanel    = this.examWrapper.querySelector('.aimcq-nav-panel');
+        this.navButtons  = this.navPanel ? this.navPanel.querySelectorAll('.aimcq-q-btn') : [];
+        this.navToggleBtn = this.examWrapper.querySelector('.aimcq-nav-toggle-btn');
+        this.navOverlay   = this.examWrapper.querySelector('.aimcq-nav-overlay');
+
+        this.modalOverlay = document.getElementById('aimcq-modal-overlay-' + examId);
+        this.modalTitle   = this.modalOverlay.querySelector('.aimcq-modal-title');
+        this.modalBody    = this.modalOverlay.querySelector('.aimcq-modal-body');
+        this.modalButtons = this.modalOverlay.querySelector('.aimcq-modal-buttons');
+    }
+
+    ExamRunner.prototype.init = function() {
+        var self = this;
+        var langSelect = document.getElementById('instructions-lang-' + this.examId);
+        if (langSelect) {
+            langSelect.addEventListener('change', function(e) {
+                var lang = e.target.value;
+                self.examWrapper.querySelectorAll('.inst-en').forEach(function(el) { el.style.display = lang === 'en' ? 'block' : 'none'; });
+                self.examWrapper.querySelectorAll('.inst-hi').forEach(function(el) { el.style.display = lang === 'hi' ? 'block' : 'none'; });
+                self.examWrapper.querySelectorAll('.inst-en-inline').forEach(function(el) { el.style.display = lang === 'en' ? 'inline' : 'none'; });
+                self.examWrapper.querySelectorAll('.inst-hi-inline').forEach(function(el) { el.style.display = lang === 'hi' ? 'inline' : 'none'; });
+                if (self.startBtn) {
+                    var isRev = self.settings.exam_type === 'revision';
+                    var resumeEn = isRev ? 'Resume Practice' : 'Resume Test';
+                    var resumeHi = isRev ? 'अभ्यास फिर से शुरू करें' : 'परीक्षा फिर से शुरू करें';
+                    var noticeEn = isRev ? 'You have not completed this revision yet.' : 'You have not completed this test yet.';
+                    var noticeHi = isRev ? 'आपने अभी तक इस रिवीजन को पूरा नहीं किया है।' : 'आपने अभी तक इस परीक्षा को पूरा नहीं किया है।';
+                    if (self.hasSavedState) {
+                        self.startBtn.textContent = lang === 'en' ? resumeEn : resumeHi;
+                        var n = document.getElementById('aimcq-resume-notice-' + self.examId);
+                        if (n) n.textContent = lang === 'en' ? noticeEn : noticeHi;
+                    } else {
+                        self.startBtn.textContent = lang === 'en' ? 'I am ready to begin' : 'मैं शुरू करने के लिए तैयार हूँ';
+                    }
+                }
+            });
+        }
+
+        if (this.agreeCheckbox && this.startBtn) {
+            this.agreeCheckbox.addEventListener('change', function(e) {
+                self.startBtn.disabled = !e.target.checked;
+            });
+        }
+        if (this.startBtn) {
+            this.startBtn.addEventListener('click', function() { self.startExam(); });
+        }
+        if (this.navToggleBtn) this.navToggleBtn.addEventListener('click', function() { self.toggleNavPanel(); });
+        if (this.navOverlay)   this.navOverlay.addEventListener('click', function() { self.toggleNavPanel(false); });
+
+        this.hasSavedState = this.loadState();
+
+        if (this.hasSavedState) {
+            var currentLang = langSelect ? langSelect.value : 'en';
+            var isRev = this.settings.exam_type === 'revision';
+            var resumeEn = isRev ? 'Resume Practice' : 'Resume Test';
+            var resumeHi = isRev ? 'अभ्यास फिर से शुरू करें' : 'परीक्षा फिर से शुरू करें';
+            var noticeEn = isRev ? 'You have not completed this revision yet.' : 'You have not completed this test yet.';
+            var noticeHi = isRev ? 'आपने अभी तक इस रिवीजन को पूरा नहीं किया है।' : 'आपने अभी तक इस परीक्षा को पूरा नहीं किया है।';
+            this.startBtn.textContent = currentLang === 'en' ? resumeEn : resumeHi;
+            var noticeEl = document.getElementById('aimcq-resume-notice-' + this.examId);
+            if (!noticeEl) {
+                noticeEl = document.createElement('p');
+                noticeEl.id = 'aimcq-resume-notice-' + this.examId;
+                noticeEl.style.cssText = 'color:#d63638;font-weight:bold;margin-bottom:15px;font-size:1.05rem;';
+                this.startBtn.parentNode.insertBefore(noticeEl, this.startBtn);
+            }
+            noticeEl.textContent = currentLang === 'en' ? noticeEn : noticeHi;
+            this.startBtn.disabled = false;
+            if (this.agreeCheckbox) this.agreeCheckbox.checked = true;
+        }
+    };
+
+    ExamRunner.prototype.toggleNavPanel = function(forceState) {
+        var shouldOpen = forceState === undefined
+            ? !this.examWrapper.classList.contains('nav-panel-open') : forceState;
+        this.examWrapper.classList.toggle('nav-panel-open', shouldOpen);
+    };
+
+    ExamRunner.prototype.saveState = function() {
+        var self = this;
+        var state = { currentIndex: this.currentIndex, timeRemaining: this.timeRemaining, questions: {} };
+        this.questions.forEach(function(q, index) {
+            state.questions[q.id] = {
+                visited:    self.questionStates[index].visited,
+                answered:   self.questionStates[index].answered,
+                review:     self.questionStates[index].review,
+                selections: self.userSelections[index] || [],
+                language:   self.questionLanguages[index]
+            };
+        });
+        try { localStorage.setItem(this.storageKey, JSON.stringify(state)); } catch (e) {}
+    };
+
+    ExamRunner.prototype.loadState = function() {
+        var savedStr;
+        try { savedStr = localStorage.getItem(this.storageKey); } catch (e) { return false; }
+        if (!savedStr) return false;
+        try {
+            var state = JSON.parse(savedStr);
+            var self = this;
+            this.timeRemaining = state.timeRemaining;
+            this.currentIndex = (state.currentIndex >= 0 && state.currentIndex < this.totalQuestions) ? state.currentIndex : 0;
+            this.questions.forEach(function(q, index) {
+                if (state.questions[q.id]) {
+                    var sq = state.questions[q.id];
+                    self.questionStates[index].visited  = sq.visited || false;
+                    self.questionStates[index].answered = sq.answered || false;
+                    self.questionStates[index].review   = sq.review || false;
+                    if (sq.selections && sq.selections.length > 0) self.userSelections[index] = sq.selections;
+                    var defLang = (q.en && q.en.content && q.en.content.trim() !== '') ? 'en' : 'hi';
+                    self.questionLanguages[index] = sq.language || defLang;
+                }
+            });
+            return true;
+        } catch (e) { return false; }
+    };
+
+    ExamRunner.prototype.clearState = function() {
+        try { localStorage.removeItem(this.storageKey); } catch (e) {}
+    };
+
+    ExamRunner.prototype.renderMath = function(element) {
+        if (window.renderMathInElement) {
+            renderMathInElement(element, {
+                delimiters: [
+                    { left: '$$', right: '$$', display: true },
+                    { left: '$',  right: '$',  display: false },
+                    { left: '\\(', right: '\\)', display: false },
+                    { left: '\\[', right: '\\]', display: true }
+                ]
+            });
+        }
+    };
+
+    ExamRunner.prototype.renderChemistry = function(element) {
+        if (typeof SmilesDrawer === 'undefined') return;
+        var canvases = element.querySelectorAll('canvas[data-smiles]:not([data-drawn="true"])');
+        if (!canvases.length) return;
+        canvases.forEach(function(canvas) {
+            var smiles = canvas.getAttribute('data-smiles');
+            var w = parseInt(canvas.getAttribute('width') || 300);
+            var h = parseInt(canvas.getAttribute('height') || 200);
+            if (!canvas.hasAttribute('width'))  canvas.width = w;
+            if (!canvas.hasAttribute('height')) canvas.height = h;
+            var drawer = new SmilesDrawer.Drawer({ width: w, height: h });
+            SmilesDrawer.parse(smiles, function(tree) {
+                drawer.draw(tree, canvas, 'light', false);
+                canvas.setAttribute('data-drawn', 'true');
+            }, function(err) { console.log('SmilesDrawer error: ' + err); });
+        });
+    };
+
+    ExamRunner.prototype.startExam = function() {
+        document.body.classList.add('aimcq-fullscreen-active');
+        this.examWrapper.classList.add('exam-active');
+        this.startScreen.style.display = 'none';
+        if (this.settings.shuffle_options) this.shuffleOptions();
+        if (this.hasSavedState) this.restoreDOMFromState();
+        if (this.settings.timer > 0) this.startTimer();
+        this.setupEventListeners();
+        this.renderMath(this.examContainer);
+        this.renderChemistry(this.examContainer);
+        this.questionStates[this.currentIndex].visited = true;
+        this.jumpToQuestion(this.currentIndex);
+    };
+
+    ExamRunner.prototype.restoreDOMFromState = function() {
+        var self = this;
+        this.questions.forEach(function(qData, index) {
+            var qElem = self.questionElements[index];
+            if (!qElem) return;
+            var activeLang = self.questionLanguages[index];
+            var defLang = (qData.en && qData.en.content && qData.en.content.trim() !== '') ? 'en' : 'hi';
+            if (activeLang !== defLang) {
+                self.questionLanguages[index] = defLang;
+                self.switchQuestionLanguage(index, activeLang, true);
+            }
+            var selections = self.userSelections[index];
+            if (selections && selections.length > 0) {
+                selections.forEach(function(val) {
+                    var input = qElem.querySelector('input[value="' + val + '"]');
+                    if (input) { input.checked = true; input.parentElement.classList.add('selected'); }
+                });
+            }
+            if (self.settings.feedback_mode === 'instant' && self.questionStates[index].answered) {
+                qElem.dataset.checked = 'true';
+                self.evaluateQuestion(qElem, qData, true);
+                if (self.settings.show_explanation) {
+                    var lang = self.questionLanguages[index];
+                    var explanation = qData[lang].explanation;
+                    var explDiv = qElem.querySelector('.aimcq-explanation');
+                    if (explanation && explDiv) {
+                        explDiv.innerHTML = '<strong>Explanation:</strong> ' + explanation;
+                        explDiv.style.display = 'block';
+                        self.renderMath(explDiv);
+                        self.renderChemistry(explDiv);
+                    }
+                }
+            }
+        });
+    };
+
+    ExamRunner.prototype.shuffleOptions = function() {
+        this.questionElements.forEach(function(qElem) {
+            var optionsList = qElem.querySelector('.aimcq-options ul');
+            if (!optionsList) return;
+            var options = Array.prototype.slice.call(optionsList.children);
+            for (var i = options.length - 1; i > 0; i--) {
+                var j = Math.floor(Math.random() * (i + 1));
+                var tmp = options[i]; options[i] = options[j]; options[j] = tmp;
+            }
+            options.forEach(function(o) { optionsList.appendChild(o); });
+        });
+    };
+
+    ExamRunner.prototype.setupEventListeners = function() {
+        var self = this;
+        var bottomBar = this.examWrapper.querySelector('[data-role="bottom-actions"]');
+
+        function btn(action) {
+            return self.examWrapper.querySelector('[data-action="' + action + '"]');
+        }
+        var btnSaveNext = btn('save-next');
+        var btnReview   = btn('review');
+        var btnClear    = btn('clear');
+        var btnCheck    = btn('check');
+        var btnSubmit   = btn('submit-nav');
+
+        var sectionTabs = this.navPanel ? this.navPanel.querySelectorAll('.aimcq-section-tab') : [];
+        if (sectionTabs.length > 0) {
+            this.navPanel.addEventListener('click', function(e) {
+                if (e.target.matches('.aimcq-section-tab')) {
+                    sectionTabs.forEach(function(t) { t.classList.remove('active'); });
+                    e.target.classList.add('active');
+                    var target = e.target.dataset.sectionTarget;
+                    self.navButtons.forEach(function(b) {
+                        b.style.display = (target === 'all' || b.dataset.section === target) ? 'flex' : 'none';
+                    });
+                }
+            });
+        }
+
+        if (btnSaveNext) btnSaveNext.addEventListener('click', function() {
+            self.saveState();
+            if (self.currentIndex < self.totalQuestions - 1) {
+                self.navigate(1);
+            } else {
+                self.updateNavPanel();
+                if (self.settings.exam_type === 'revision') {
+                    self.finishExam();
+                } else {
+                    self.showModal('Confirm Submission', 'You have reached the end of the exam. Are you sure you want to submit?', [
+                        { text: 'Yes, Submit Exam', class: 'aimcq-modal-btn-confirm', action: function() { self.finishExam(); } },
+                        { text: 'Cancel', class: 'aimcq-modal-btn-cancel', action: function() { self.hideModal(); } }
+                    ]);
+                }
+            }
+        });
+
+        if (btnReview) btnReview.addEventListener('click', function() {
+            self.questionStates[self.currentIndex].review = !self.questionStates[self.currentIndex].review;
+            self.saveState();
+            self.updateNavPanel();
+            btnReview.textContent = self.questionStates[self.currentIndex].review ? 'Unmark Review' : 'Mark for Review';
+        });
+
+        if (btnClear) btnClear.addEventListener('click', function() {
+            self.clearQuestionSelection(self.currentIndex);
+        });
+
+        if (btnCheck) btnCheck.addEventListener('click', function() {
+            self.checkInstantAnswer();
+        });
+
+        if (btnSubmit) btnSubmit.addEventListener('click', function() {
+            self.showModal('Confirm Submission', 'Are you sure you want to finish and submit the exam?', [
+                { text: 'Yes, Submit Exam', class: 'aimcq-modal-btn-confirm', action: function() { self.finishExam(); } },
+                { text: 'Cancel', class: 'aimcq-modal-btn-cancel', action: function() { self.hideModal(); } }
+            ]);
+        });
+
+        this.form.addEventListener('change', function(e) {
+            var qElem = e.target.closest('.aimcq-question');
+            if (!qElem) return;
+            var qIndex = parseInt(qElem.dataset.questionIndex, 10);
+            if (e.target.name && e.target.name.indexOf('question_') === 0) {
+                var inputs = qElem.querySelectorAll('input[name="' + e.target.name + '"]');
+                qElem.querySelectorAll('.aimcq-options label').forEach(function(l) { l.classList.remove('selected'); });
+                inputs.forEach(function(i) { if (i.checked) i.parentElement.classList.add('selected'); });
+                var checked = qElem.querySelectorAll('input[name="' + e.target.name + '"]:checked');
+                self.questionStates[qIndex].answered = checked.length > 0;
+                self.userSelections[qIndex] = Array.prototype.slice.call(checked).map(function(i) { return i.value; });
+                self.updateNavPanel();
+                self.saveState();
+            }
+        });
+
+        this.form.addEventListener('click', function(e) {
+            if (e.target.classList.contains('aimcq-lang-btn')) {
+                var qElem = e.target.closest('.aimcq-question');
+                self.switchQuestionLanguage(parseInt(qElem.dataset.questionIndex, 10), e.target.dataset.lang);
+            }
+        });
+
+        if (this.navPanel) {
+            this.navPanel.addEventListener('click', function(e) {
+                if (e.target.matches('.aimcq-q-btn')) {
+                    var qIndex = parseInt(e.target.getAttribute('data-q-index'), 10);
+                    if (isNaN(qIndex)) return;
+                    if (self.form.dataset.finished === 'true') {
+                        var targetQ = self.questionElements[qIndex];
+                        var mainContent = self.examWrapper.querySelector('.aimcq-main-content');
+                        if (targetQ && mainContent) {
+                            safeScrollTo(mainContent, targetQ.offsetTop - 20);
+                            if (window.innerWidth < 992) self.toggleNavPanel(false);
+                            var origBg = targetQ.style.backgroundColor;
+                            targetQ.style.backgroundColor = 'var(--aimcq-info-light)';
+                            targetQ.style.transition = 'background-color 0.8s ease';
+                            setTimeout(function() { targetQ.style.backgroundColor = origBg; }, 1200);
+                        }
+                    } else {
+                        self.jumpToQuestion(qIndex);
+                    }
+                }
+            });
+        }
+    };
+
+    ExamRunner.prototype.switchQuestionLanguage = function(qIndex, lang, skipSave) {
+        if (this.questionLanguages[qIndex] === lang) return;
+        this.questionLanguages[qIndex] = lang;
+        var self = this;
+        var qElem = this.questionElements[qIndex];
+        var qData = this.questions[qIndex];
+        var langData = qData[lang];
+        var englishOptionsData = qData.en ? qData.en.options : [];
+
+        qElem.querySelectorAll('.aimcq-lang-btn').forEach(function(b) { b.classList.remove('active'); });
+        var targetBtn = qElem.querySelector('.aimcq-lang-btn[data-lang="' + lang + '"]');
+        if (targetBtn) targetBtn.classList.add('active');
+
+        qElem.querySelector('.aimcq-question-content-body').innerHTML = langData.content;
+
+        var optionsList = qElem.querySelector('.aimcq-options ul');
+        var selectedValues = Array.prototype.slice.call(optionsList.querySelectorAll('input:checked')).map(function(i) { return i.value; });
+        optionsList.innerHTML = '';
+        var isMulti = qData.correct.length > 1;
+        var imageStyle = 'width:' + (qData.image_width > 0 ? qData.image_width + 'px' : 'auto')
+            + ';height:' + (qData.image_height > 0 ? qData.image_height + 'px;object-fit:cover;' : 'auto') + ';';
+
+        (langData.options || []).forEach(function(optRaw, optIndex) {
+            var optionData = (typeof optRaw === 'string') ? { text: optRaw, image: '' } : optRaw;
+            var li = document.createElement('li');
+            var label = document.createElement('label');
+            var input = document.createElement('input');
+            input.type = isMulti ? 'checkbox' : 'radio';
+            input.name = 'question_' + qData.id + '[]';
+            input.value = optIndex;
+            if (selectedValues.indexOf(String(optIndex)) !== -1) { input.checked = true; label.classList.add('selected'); }
+            label.appendChild(input);
+            var innerWrap = document.createElement('div');
+            innerWrap.className = 'aimcq-option-inner-wrap';
+            var letterSpan = document.createElement('span');
+            letterSpan.className = 'aimcq-option-label-letter';
+            letterSpan.textContent = String.fromCharCode(65 + optIndex);
+            innerWrap.appendChild(letterSpan);
+            var imageToShow = optionData.image || (englishOptionsData && englishOptionsData[optIndex]
+                ? (typeof englishOptionsData[optIndex] === 'string' ? '' : englishOptionsData[optIndex].image) : '');
+            if (imageToShow) {
+                var img = document.createElement('img');
+                img.src = imageToShow; img.alt = 'Option image';
+                img.className = 'aimcq-option-image'; img.style.cssText = imageStyle;
+                innerWrap.appendChild(img);
+            }
+            var textDiv = document.createElement('div');
+            textDiv.className = 'aimcq-option-text-content';
+            textDiv.innerHTML = optionData.text || '';
+            innerWrap.appendChild(textDiv);
+            label.appendChild(innerWrap);
+            li.appendChild(label);
+            optionsList.appendChild(li);
+        });
+
+        if (this.form.dataset.finished === 'true'
+            || (this.settings.feedback_mode === 'instant' && qElem.dataset.checked === 'true')) {
+            this.evaluateQuestion(qElem, qData, true);
+            var explDiv = qElem.querySelector('.aimcq-explanation');
+            if (explDiv.style.display !== 'none') {
+                explDiv.innerHTML = '<strong>Explanation:</strong> ' + langData.explanation;
+            }
+        }
+
+        if (qData.is_passage_question) {
+            var pc = this.examWrapper.querySelector('#passage-display-' + slugSafe('p' + qData.passage_id));
+            if (pc) {
+                var enT = pc.querySelector('.aimcq-passage-title-en');
+                var hiT = pc.querySelector('.aimcq-passage-title-hi');
+                var enC = pc.querySelector('.aimcq-passage-content-en');
+                var hiC = pc.querySelector('.aimcq-passage-content-hi');
+                if (enT) enT.style.display = lang === 'en' ? 'block' : 'none';
+                if (hiT) hiT.style.display = lang === 'hi' ? 'block' : 'none';
+                if (enC) enC.style.display = lang === 'en' ? 'block' : 'none';
+                if (hiC) hiC.style.display = lang === 'hi' ? 'block' : 'none';
+                this.renderMath(pc);
+                this.renderChemistry(pc);
+            }
+        }
+        this.renderMath(qElem);
+        this.renderChemistry(qElem);
+        if (!skipSave) this.saveState();
+    };
+
+    ExamRunner.prototype.startTimer = function() {
+        var self = this;
+        var timerEl = document.getElementById('aimcq-timer-' + this.examId);
+        if (!timerEl) return;
+        this.timerInterval = setInterval(function() {
+            if (self.timeRemaining > 0) self.timeRemaining--;
+            var m = Math.floor(self.timeRemaining / 60);
+            var s = self.timeRemaining % 60;
+            timerEl.textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+            if (self.timeRemaining % 5 === 0) self.saveState();
+            if (self.timeRemaining <= 0) {
+                clearInterval(self.timerInterval);
+                self.showModal("Time's Up!", 'Your time has expired. The exam will now be submitted automatically.', [
+                    { text: 'OK', class: 'aimcq-modal-btn-confirm', action: function() { self.finishExam(); } }
+                ]);
+            }
+        }, 1000);
+    };
+
+    ExamRunner.prototype.navigate = function(direction) {
+        this.jumpToQuestion(this.currentIndex + direction);
+    };
+
+    ExamRunner.prototype.jumpToQuestion = function(index) {
+        if (index < 0 || index >= this.totalQuestions) return;
+        if (this.questionElements[this.currentIndex]) this.questionElements[this.currentIndex].classList.add('hidden');
+
+        this.currentIndex = index;
+        this.questionStates[this.currentIndex].visited = true;
+        var currentQuestionData = this.questions[this.currentIndex];
+        var isLast = (this.currentIndex === this.totalQuestions - 1);
+        var isChecked = this.questionElements[this.currentIndex].dataset.checked === 'true';
+
+        this.questionElements[this.currentIndex].classList.remove('hidden');
+
+        var sectionTabs = this.navPanel ? this.navPanel.querySelectorAll('.aimcq-section-tab') : [];
+        if (sectionTabs.length > 0) {
+            var qSection = currentQuestionData.section_id;
+            var activeTab = Array.prototype.slice.call(sectionTabs).find(function(t) { return t.classList.contains('active'); });
+            if (activeTab && activeTab.dataset.sectionTarget !== 'all' && activeTab.dataset.sectionTarget !== qSection) {
+                var targetTab = Array.prototype.slice.call(sectionTabs).find(function(t) { return t.dataset.sectionTarget === qSection; });
+                if (targetTab) targetTab.click();
+            }
+        }
+
+        var btnCheck = this.examWrapper.querySelector('[data-action="check"]');
+        if (btnCheck) btnCheck.style.display = isChecked ? 'none' : '';
+
+        var btnSaveNext = this.examWrapper.querySelector('[data-action="save-next"]');
+        var btnReview   = this.examWrapper.querySelector('[data-action="review"]');
+        if (btnSaveNext) {
+            if (this.settings.exam_type === 'revision') {
+                btnSaveNext.textContent = isLast ? 'Finish Revision' : 'Next Question';
+                btnSaveNext.style.display = isChecked ? '' : 'none';
+            } else {
+                btnSaveNext.textContent = isLast ? 'Save & Submit' : 'Save & Next';
+                btnSaveNext.style.display = '';
+            }
+        }
+        if (btnReview) {
+            btnReview.textContent = this.questionStates[this.currentIndex].review ? 'Unmark Review' : 'Mark for Review';
+        }
+
+        this.updateNavPanel();
+
+        this.examWrapper.querySelectorAll('.aimcq-passage-display').forEach(function(p) { p.style.display = 'none'; });
+        if (currentQuestionData.is_passage_question) {
+            var pc = this.examWrapper.querySelector('#passage-display-' + slugSafe('p' + currentQuestionData.passage_id));
+            if (pc) {
+                pc.style.display = 'block';
+                var lang = this.questionLanguages[this.currentIndex];
+                var enT = pc.querySelector('.aimcq-passage-title-en');
+                var hiT = pc.querySelector('.aimcq-passage-title-hi');
+                var enC = pc.querySelector('.aimcq-passage-content-en');
+                var hiC = pc.querySelector('.aimcq-passage-content-hi');
+                if (enT) enT.style.display = lang === 'en' ? 'block' : 'none';
+                if (hiT) hiT.style.display = lang === 'hi' ? 'block' : 'none';
+                if (enC) enC.style.display = lang === 'en' ? 'block' : 'none';
+                if (hiC) hiC.style.display = lang === 'hi' ? 'block' : 'none';
+            }
+        }
+
+        if (window.innerWidth < 992) this.toggleNavPanel(false);
+        var mainContent = this.examWrapper.querySelector('.aimcq-main-content');
+        if (mainContent) safeScrollTo(mainContent, 0);
+        this.saveState();
+    };
+
+    ExamRunner.prototype.checkInstantAnswer = function() {
+        var qElem = this.questionElements[this.currentIndex];
+        var qData = this.questions[this.currentIndex];
+        this.evaluateQuestion(qElem, qData, true);
+        if (this.settings.show_explanation) {
+            var lang = this.questionLanguages[this.currentIndex];
+            var explanation = this.questions[this.currentIndex][lang].explanation;
+            var explDiv = qElem.querySelector('.aimcq-explanation');
+            if (explanation && explDiv) {
+                explDiv.innerHTML = '<strong>Explanation:</strong> ' + explanation;
+                explDiv.style.display = 'block';
+                this.renderMath(explDiv);
+                this.renderChemistry(explDiv);
+            }
+        }
+        qElem.dataset.checked = 'true';
+        var btnCheck = this.examWrapper.querySelector('[data-action="check"]');
+        if (btnCheck) btnCheck.style.display = 'none';
+        var btnSaveNext = this.examWrapper.querySelector('[data-action="save-next"]');
+        if (btnSaveNext && this.settings.exam_type === 'revision') btnSaveNext.style.display = '';
+        this.updateNavPanel();
+        this.saveState();
+    };
+
+    ExamRunner.prototype.clearQuestionSelection = function(qIndex) {
+        var qElem = this.questionElements[qIndex];
+        if (!qElem) return;
+        qElem.querySelectorAll('input:checked').forEach(function(i) { i.checked = false; });
+        qElem.querySelectorAll('.aimcq-options label').forEach(function(l) { l.classList.remove('selected'); });
+        this.questionStates[qIndex].answered = false;
+        delete this.userSelections[qIndex];
+        this.updateNavPanel();
+        this.saveState();
+    };
+
+    ExamRunner.prototype.updateNavPanel = function() {
+        if (!this.navPanel) return;
+        var self = this;
+        this.navButtons.forEach(function(btn, index) {
+            var state = self.questionStates[index];
+            var baseDisplay = btn.style.display;
+            btn.className = 'aimcq-q-btn';
+            if (state.review && state.answered) btn.classList.add('q-answered-review');
+            else if (state.review)             btn.classList.add('q-review');
+            else if (state.answered)           btn.classList.add('q-answered');
+            else if (state.visited)            btn.classList.add('q-unanswered');
+            else                               btn.classList.add('q-not-visited');
+            if (index === self.currentIndex) btn.classList.add('q-current');
+            btn.style.display = baseDisplay;
+        });
+        var counts = { visited: 0, unanswered: 0, answered: 0, review: 0, answeredReview: 0 };
+        this.questionStates.forEach(function(s) {
+            if (!s.visited) counts.visited++;
+            else if (s.review && s.answered) counts.answeredReview++;
+            else if (s.review)               counts.review++;
+            else if (s.answered)             counts.answered++;
+            else                             counts.unanswered++;
+        });
+        function setCount(name, val) {
+            var el = self.navPanel.querySelector('[data-count="' + name + '"]');
+            if (el) el.textContent = val;
+        }
+        setCount('not-visited', counts.visited);
+        setCount('unanswered', counts.unanswered);
+        setCount('answered', counts.answered);
+        setCount('review', counts.review);
+        setCount('answered-review', counts.answeredReview);
+    };
+
+    ExamRunner.prototype.evaluateQuestion = function(qElem, qData, disableInputs) {
+        var correctAnswers = (qData.correct || []).map(String);
+        var qIndex = parseInt(qElem.dataset.questionIndex, 10);
+        var selectedAnswers = this.userSelections[qIndex] || [];
+        var isCorrect = selectedAnswers.length > 0
+            && selectedAnswers.length === correctAnswers.length
+            && selectedAnswers.every(function(val) { return correctAnswers.indexOf(val) !== -1; });
+        if (this.settings.feedback_mode === 'end_of_exam' || disableInputs) {
+            qElem.querySelectorAll('.aimcq-options label').forEach(function(label) {
+                var input = label.querySelector('input');
+                label.classList.remove('correct', 'incorrect', 'missed', 'selected');
+                if (correctAnswers.indexOf(input.value) !== -1) {
+                    if (selectedAnswers.indexOf(input.value) !== -1) label.classList.add('correct');
+                    else label.classList.add('missed');
+                } else if (selectedAnswers.indexOf(input.value) !== -1) {
+                    label.classList.add('incorrect');
+                }
+                if (disableInputs) { input.disabled = true; label.classList.add('disabled'); }
+            });
+        }
+        return isCorrect;
+    };
+
+    ExamRunner.prototype.showModal = function(title, body, buttons) {
+        this.hideModal();
+        this.modalTitle.textContent = title;
+        this.modalBody.innerHTML = body;
+        var self = this;
+        buttons.forEach(function(info) {
+            var b = document.createElement('button');
+            b.textContent = info.text;
+            b.className = info.class;
+            b.addEventListener('click', info.action, { once: true });
+            self.modalButtons.appendChild(b);
+        });
+        this.modalOverlay.style.display = 'flex';
+    };
+
+    ExamRunner.prototype.hideModal = function() {
+        this.modalOverlay.style.display = 'none';
+        this.modalButtons.innerHTML = '';
+    };
+
+    ExamRunner.prototype.finishExam = function() {
+        var self = this;
+        this.clearState();
+        this.hideModal();
+        if (window.innerWidth < 992) this.toggleNavPanel(false);
+        if (this.timerInterval) clearInterval(this.timerInterval);
+        this.form.dataset.finished = 'true';
+
+        if (this.navToggleBtn) this.navToggleBtn.style.display = 'none';
+        var bottomBar = this.examWrapper.querySelector('[data-role="bottom-actions"]');
+        if (bottomBar) bottomBar.style.display = 'none';
+        var submitBtn = this.examWrapper.querySelector('[data-action="submit-nav"]');
+        if (submitBtn) submitBtn.style.display = 'none';
+
+        if (this.settings.feedback_mode !== 'instant') {
+            var totalCorrect = 0, totalWrong = 0, totalAttempted = 0;
+            this.questionElements.forEach(function(qElem, index) {
+                var qData = self.questions[index];
+                var qIndex = parseInt(qElem.dataset.questionIndex, 10);
+                var selectedAnswers = self.userSelections[qIndex] || [];
+                var isAttempted = selectedAnswers.length > 0;
+                var isCorrect = self.evaluateQuestion(qElem, qData, true);
+                if (isAttempted) {
+                    totalAttempted++;
+                    if (isCorrect) totalCorrect++; else totalWrong++;
+                }
+                if (self.settings.show_explanation) {
+                    var lang = self.questionLanguages[index];
+                    var explanation = self.questions[index][lang].explanation;
+                    var explDiv = qElem.querySelector('.aimcq-explanation');
+                    if (explanation && explDiv) {
+                        explDiv.innerHTML = '<strong>Explanation:</strong> ' + explanation;
+                        explDiv.style.display = 'block';
+                        self.renderMath(explDiv);
+                        self.renderChemistry(explDiv);
+                    }
+                }
+            });
+            this.examStats = { totalCorrect: totalCorrect, totalWrong: totalWrong, totalAttempted: totalAttempted };
+        }
+
+        this.examWrapper.querySelectorAll('.aimcq-passage-display').forEach(function(p) { p.style.display = 'block'; });
+        this.questionElements.forEach(function(q) { q.classList.remove('hidden'); });
+
+        if (this.settings.exam_type === 'revision') {
+            var reviewedCount = Array.prototype.slice.call(this.questionElements)
+                .filter(function(q) { return q.dataset.checked === 'true'; }).length;
+            var message = reviewedCount === this.totalQuestions
+                ? 'You have reviewed all <strong>' + this.totalQuestions + '</strong> questions.'
+                : 'You have reviewed only <strong>' + reviewedCount + '</strong> '
+                  + (reviewedCount === 1 ? 'question' : 'questions') + '.';
+            this.resultsDiv.innerHTML = '<h3>Revision Completed!</h3><p>' + message + '</p>';
+            this.resultsDiv.className = 'aimcq-results pass';
+        } else {
+            var stats = this.examStats || { totalCorrect: 0, totalWrong: 0, totalAttempted: 0 };
+            var marksPerQ = Number(this.settings.marks_per_question);
+            if (isNaN(marksPerQ)) marksPerQ = 1;
+            var negMarks = Number(this.settings.negative_marks);
+            if (isNaN(negMarks)) negMarks = 0;
+            var rawMax = this.totalQuestions * marksPerQ;
+            var rawObtained = (stats.totalCorrect * marksPerQ) - (stats.totalWrong * negMarks);
+            var totalMaxMarks = Math.round(rawMax * 100) / 100;
+            var obtainedMarks = Math.round(rawObtained * 100) / 100;
+            var percentage = totalMaxMarks > 0 ? ((obtainedMarks / totalMaxMarks) * 100) : 0;
+            percentage = Math.round(percentage * 100) / 100;
+            var fPct = Number.isInteger(percentage) ? percentage : percentage.toFixed(2);
+            var fObt = Number.isInteger(obtainedMarks) ? obtainedMarks : obtainedMarks.toFixed(2);
+            var fMax = Number.isInteger(totalMaxMarks) ? totalMaxMarks : totalMaxMarks.toFixed(2);
+            this.resultsDiv.innerHTML =
+                '<h3 class="aimcq-results-title">Exam Finished!</h3>'
+              + '<table class="aimcq-results-table"><tbody>'
+              + '<tr><th>Total Questions</th><td>' + this.totalQuestions + '</td></tr>'
+              + '<tr><th>Attempted</th><td>' + stats.totalAttempted + '</td></tr>'
+              + '<tr><th>Correct Answers</th><td style="color:var(--aimcq-success);">' + stats.totalCorrect + '</td></tr>'
+              + '<tr><th>Wrong Answers</th><td style="color:var(--aimcq-danger);">' + stats.totalWrong + '</td></tr>'
+              + '<tr class="highlight-row"><th>Max Marks</th><td>' + fMax + '</td></tr>'
+              + '<tr class="highlight-row"><th>Obtained Marks</th><td style="color:var(--aimcq-primary);font-size:1.2rem;">' + fObt + '</td></tr>'
+              + '<tr class="highlight-row" style="font-size:1.3rem;color:' + (percentage >= 50 ? 'var(--aimcq-success)' : 'var(--aimcq-danger)') + ';">'
+              +   '<th>Percentage</th><td>' + fPct + '%</td></tr>'
+              + '</tbody></table>';
+            this.resultsDiv.className = 'aimcq-results ' + (percentage >= 50 ? 'pass' : 'fail');
+        }
+
+        this.resultsDiv.style.display = 'block';
+        var mainContent = this.examWrapper.querySelector('.aimcq-main-content');
+        if (mainContent) {
+            safeScrollTo(mainContent, this.resultsDiv.offsetTop - 20);
+        } else if (this.resultsDiv.scrollIntoView) {
+            this.resultsDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        this.renderMath(this.form);
+        this.renderChemistry(this.form);
+    };
+
+    /* ================================================================
+       3. BOOT
+       ================================================================ */
+    var examWrapperEl = document.getElementById('aimcq-exam-' + examId);
+    if (examWrapperEl) {
+        examWrapperEl.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+    }
+    if (questionsForJs.length > 0) {
+        var runner = new ExamRunner(examId, settings, questionsForJs, pdata);
+        runner.init();
+    }
 };
