@@ -104,6 +104,60 @@ document.addEventListener('DOMContentLoaded', function () {
 
 > See `embed-snippet.html` for Method 4 (Google Drive via Apps Script proxy).
 
+## Exam interface — basic vs professional
+
+Every method above accepts an `exam_interface` setting that selects which
+quiz UI is rendered. It works identically for Methods 1, 2 and 3.
+
+```js
+exam_interface: 'basic'         // default — lightweight in-page interface
+exam_interface: 'professional'  // full-screen SSC-style CBT exam interface
+```
+
+The **professional** interface is a full-screen Computer Based Test that
+mirrors real SSC/competitive-exam software:
+
+- Full-screen exam overlay with bilingual (EN/HI) instructions and an
+  "I agree" declaration screen
+- Top bar with quiz title and a live countdown timer
+- Left question-palette panel — Not Visited / Not Answered / Answered /
+  Marked for Review / Answered & Marked counters, per-topic section tabs,
+  a clickable jump grid, and a Submit button
+- Right question area with passage display, EN/HI language switcher,
+  lettered options and explanations
+- Bottom action bar — Mark for Review, Clear Response, Save & Next
+  (plus Check Answer in revision mode)
+- localStorage session persistence (resume after reload)
+- Results screen with a per-section score breakdown table
+
+Two extra settings apply **only** to the professional interface in exam
+(non-revision) mode:
+
+```js
+marks_per_question: 1   // marks awarded for each correct answer
+negative_marks:     0   // marks deducted for each wrong answer
+```
+
+All other settings (`title`, `timer`, `shuffle_questions`,
+`shuffle_options`, `quiz_questions`, `topic_order`, etc.) behave the same
+in both interfaces. If `exam_interface` is omitted, the basic interface is
+used, so existing embeds are unaffected.
+
+```html
+<div id="aimcq-quiz-pro"></div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  window.initAimcqQuiz('aimcq-quiz-pro', /* quizDataJSON */, {
+    title: "SSC Mock Test", timer: 60,
+    shuffle_questions: true, shuffle_options: true, quiz_questions: 100,
+    exam_interface: 'professional',
+    marks_per_question: 2,
+    negative_marks: 0.5
+  });
+});
+</script>
+```
+
 ## Platforms confirmed compatible
 
 - Blogger (original home)
