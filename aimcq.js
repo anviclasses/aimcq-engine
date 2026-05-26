@@ -102,6 +102,12 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
     var S = Object.assign({}, defaultSettings, customSettings);
     var OPT_LETTERS = ['A','B','C','D','E','F','G','H'];
 
+    // Normalize exam_interface: tolerate case / stray whitespace so that
+    // 'Professional', ' professional ', 'PROFESSIONAL' all work. Anything
+    // that is not recognizably 'professional' falls back to 'basic'.
+    S.exam_interface = (String(S.exam_interface || 'basic')
+        .trim().toLowerCase() === 'professional') ? 'professional' : 'basic';
+
     // Fisher-Yates shuffle utility (returns a new array)
     function shuffleArray(arr) {
         var a = arr.slice();
@@ -1839,7 +1845,28 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
            This applies uniformly to all three embedding methods because
            loadAimcqFromDrive() funnels through initAimcqQuiz().
            ================================================================ */
-        if (S.exam_interface === 'professional' && typeof window.initAimcqProExam === 'function') {
+        if (S.exam_interface === 'professional') {
+
+            if (typeof window.initAimcqProExam !== 'function') {
+                // The pro module lives at the bottom of THIS same file, so a
+                // missing initAimcqProExam almost always means a stale/cached
+                // aimcq.js, a truncated upload, or two different versions of
+                // the engine loaded on the page. Fail loudly instead of
+                // silently dropping the website owner into the basic UI.
+                console.error('[aimcq] exam_interface is "professional" but '
+                    + 'window.initAimcqProExam is undefined. This usually means '
+                    + 'aimcq.js is an outdated or truncated copy. Re-upload the '
+                    + 'latest aimcq.js (and bump the CDN version tag).');
+                container.innerHTML = '<div id="aimcq-root-scope">'
+                    + '<div class="aq-wrapper" style="padding:24px;border:1px solid #e0b4b4;'
+                    + 'background:#fff6f6;color:#9f3a38;border-radius:8px;font:14px/1.5 sans-serif;">'
+                    + '<strong>Professional exam interface could not load.</strong><br>'
+                    + 'The engine file (aimcq.js) appears to be outdated. Please update '
+                    + 'aimcq.js to the latest version and refresh the page.'
+                    + '</div></div>';
+                return;
+            }
+
             var launchPro = function(mode) {
                 // Revision mode mirrors the basic engine: instant feedback,
                 // single-question display, no timer. initAimcqProExam reads
@@ -1850,17 +1877,36 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
                     proS.display_mode  = 'single';
                     proS.timer         = 0;
                 }
-                var activeQs = prepareQuestions(mode);
-                // initAimcqProExam fully repaints `container` with the pro UI.
-                window.initAimcqProExam(containerId, proS, activeQs, passageData, _quizFingerprint);
+                try {
+                    var activeQs = prepareQuestions(mode);
+                    // initAimcqProExam fully repaints `container` with the pro UI.
+                    window.initAimcqProExam(containerId, proS, activeQs, passageData, _quizFingerprint);
+                } catch (err) {
+                    console.error('[aimcq] Failed to launch professional exam:', err);
+                    container.innerHTML = '<div id="aimcq-root-scope">'
+                        + '<div class="aq-wrapper" style="padding:24px;border:1px solid #e0b4b4;'
+                        + 'background:#fff6f6;color:#9f3a38;border-radius:8px;font:14px/1.5 sans-serif;">'
+                        + '<strong>The exam could not start.</strong><br>'
+                        + 'Please reload the page and try again.'
+                        + '</div></div>';
+                }
             };
 
             var proStartBtns = document.querySelectorAll('#aq-start-' + containerId + ' .aq-start-btn');
-            proStartBtns.forEach(function(btn) {
-                btn.addEventListener('click', function() {
-                    launchPro(this.dataset.mode === 'revision' ? 'revision' : 'exam');
+            if (proStartBtns.length) {
+                proStartBtns.forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        launchPro(this.dataset.mode === 'revision' ? 'revision' : 'exam');
+                    });
                 });
-            });
+            } else {
+                // Defensive fallback: if the mode-picker start screen was not
+                // rendered for any reason, launch the exam directly so the
+                // professional interface still appears rather than nothing.
+                console.warn('[aimcq] Mode-picker start screen not found; '
+                    + 'launching professional exam directly.');
+                launchPro('exam');
+            }
             // Professional interface manages its own session persistence
             // (localStorage) inside initAimcqProExam — nothing more to wire here.
             return;
@@ -3305,12 +3351,30 @@ window.initAimcqProExam = function(containerId, S, qs, pdata, fingerprint) {
     /* ================================================================
        3. BOOT
        ================================================================ */
-    var examWrapperEl = document.getElementById('aimcq-exam-' + examId);
-    if (examWrapperEl) {
-        examWrapperEl.addEventListener('contextmenu', function(e) { e.preventDefault(); });
-    }
-    if (questionsForJs.length > 0) {
-        var runner = new ExamRunner(examId, settings, questionsForJs, pdata);
-        runner.init();
+    try {
+        var examWrapperEl = document.getElementById('aimcq-exam-' + examId);
+        if (examWrapperEl) {
+            examWrapperEl.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+        }
+        if (questionsForJs.length > 0) {
+            var runner = new ExamRunner(examId, settings, questionsForJs, pdata);
+            runner.init();
+        } else {
+            console.warn('[aimcq] Professional exam has no questions to display.');
+            container.innerHTML = '<div id="aimcq-pro-scope">'
+                + '<div style="padding:24px;font:14px/1.5 sans-serif;color:#555;">'
+                + 'No questions are available for this exam.'
+                + '</div></div>';
+        }
+    } catch (err) {
+        console.error('[aimcq] Professional exam interface crashed during boot:', err);
+        container.innerHTML = '<div id="aimcq-pro-scope">'
+            + '<div style="padding:24px;border:1px solid #e0b4b4;background:#fff6f6;'
+            + 'color:#9f3a38;border-radius:8px;font:14px/1.5 sans-serif;">'
+            + '<strong>The professional exam interface failed to start.</strong><br>'
+            + 'Please reload the page. If the problem persists, check the browser '
+            + 'console for details.'
+            + '</div></div>';
+        try { document.body.classList.remove('aimcq-fullscreen-active'); } catch (e) {}
     }
 };
