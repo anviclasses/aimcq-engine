@@ -1,15 +1,15 @@
 <!-- ================================================================
   AI MCQs Engine — Universal Embed Snippet
   ----------------------------------------------------------------
-  ① Paste the HEAD BLOCK once per site (in <head> or before </body>)
-  ② Then drop a QUIZ BLOCK anywhere you want a quiz to appear.
+  1. Paste the HEAD BLOCK once per site (in <head> or before </body>)
+  2. Then drop a QUIZ BLOCK anywhere you want a quiz to appear.
   Replace YOUR-USER, YOUR-REPO, and VERSION with your GitHub details.
 ================================================================ -->
 
 
-<!-- ════════════════════════════════════════════════════════════
-  ① HEAD BLOCK — paste ONCE per site
-════════════════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════════════════
+  HEAD BLOCK — paste ONCE per site
+══════════════════════════════════════════════════════════ -->
 <link  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 <link  rel="stylesheet" href="https://cdn.jsdelivr.net/gh/YOUR-USER/aimcq-engine@VERSION/aimcq.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
@@ -18,16 +18,16 @@
 <script defer src="https://cdn.jsdelivr.net/gh/YOUR-USER/aimcq-engine@VERSION/aimcq.js"></script>
 
 
-<!-- ════════════════════════════════════════════════════════════
-  ② QUIZ BLOCKS — paste per page/post where you want a quiz
-════════════════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════════════════
+  QUIZ BLOCKS — paste per page/post where you want a quiz
+══════════════════════════════════════════════════════════ -->
 
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<!-- ────────────────────────────────────────────────────────
   METHOD 1 — Inline JSON
-  Best for: small quizzes you want fully self-contained in the page.
-  How: paste your exported quiz JSON directly into quizData below.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  Best for: small quizzes fully self-contained in the page.
+  How: paste your exported quiz JSON directly into quizData.
+──────────────────────────────────────────────────────────── -->
 <div id="aimcq-quiz-1"></div>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function () {
   window.initAimcqQuiz('aimcq-quiz-1', quizData, {
     title: "My Quiz Title",
     description: "Short description shown on the start screen",
-    timer: 10,                  // minutes; 0 = no timer
+    timer: 10,               // minutes; 0 = no timer
     shuffle_questions: true,
     shuffle_options: true,
     quiz_questions: 10,
@@ -47,31 +47,27 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<!-- ────────────────────────────────────────────────────────
   METHOD 2 — Single JSON file from a public URL
-  Best for: one chapter / one topic loaded from GitHub + jsDelivr.
+  Best for: one chapter / one topic hosted on GitHub + jsDelivr.
 
-  How to get a jsDelivr URL for your JSON file:
-    1. Push your JSON file to a public GitHub repo
-    2. Create a release tag (e.g. v1.0)
-    3. URL pattern:
-       https://cdn.jsdelivr.net/gh/USER/REPO@TAG/path/to/file.json
+  jsDelivr URL pattern:
+    https://cdn.jsdelivr.net/gh/USER/REPO@TAG/path/to/file.json
 
-  Works with ANY public URL — jsDelivr, raw.githubusercontent.com,
+  Works with any public URL — jsDelivr, raw.githubusercontent.com,
   your own server, Cloudflare R2, S3, etc.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+──────────────────────────────────────────────────────────── -->
 <div id="aimcq-quiz-2"></div>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
   window.loadAimcqFromDrive('aimcq-quiz-2', {
 
-    jsonUrl: 'https://cdn.jsdelivr.net/gh/fvl777/fvl777@main/neetphyjson/CH-1_%20Basic%20Mathematics%20in%20Physics.json',
-    // ↑ Replace with your own jsDelivr / CDN URL
+    jsonUrl: 'https://cdn.jsdelivr.net/gh/YOUR-USER/YOUR-REPO@TAG/path/to/quiz.json',
 
     settings: {
-      title: "NEET Physics — Ch 1: Basic Mathematics in Physics",
-      description: "Chapter 1 MCQs loaded from GitHub CDN",
+      title: "My Quiz Title",
+      description: "Short description shown on the start screen",
       timer: 10,
       shuffle_questions: true,
       shuffle_options: true,
@@ -83,19 +79,19 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  METHOD 3 — Multiple JSON files from public URLs (merged quiz)
-  Best for: multi-chapter / multi-subject tests where each chapter
-            is a separate JSON file on GitHub / CDN.
+<!-- ────────────────────────────────────────────────────────
+  METHOD 3 — Multiple JSON files merged into one quiz
+  Best for: multi-chapter / multi-subject tests where each
+  chapter is a separate JSON file on GitHub / CDN.
 
-  Each entry in jsonUrls can carry a `topic` string that powers:
-    • Horizontal scrollable topic-filter tabs
-    • Section headings inside the quiz
-    • Per-topic score breakdown on the results screen
+  Each entry in jsonUrls carries a `topic` string that powers:
+    - Horizontal scrollable topic-filter tabs
+    - Section headings inside the quiz
+    - Per-topic score breakdown on the results screen
 
-  topic_order forces the sections into your preferred sequence
-  regardless of which URL was listed first.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  topic_order forces sections into your preferred sequence
+  regardless of the order URLs are listed.
+──────────────────────────────────────────────────────────── -->
 <div id="aimcq-quiz-3"></div>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -104,101 +100,35 @@ document.addEventListener('DOMContentLoaded', function () {
 
     jsonUrls: [
       {
-        jsonUrl: 'https://cdn.jsdelivr.net/gh/fvl777/fvl777@main/neetphyjson/CH-1_%20Basic%20Mathematics%20in%20Physics.json',
-        topic:   'Basic Mathematics in Physics'
+        jsonUrl: 'https://cdn.jsdelivr.net/gh/YOUR-USER/YOUR-REPO@TAG/path/ch1.json',
+        topic:   'Chapter 1 Title'
       },
       {
         jsonUrl: 'https://cdn.jsdelivr.net/gh/YOUR-USER/YOUR-REPO@TAG/path/ch2.json',
-        topic:   'Units & Measurements'
+        topic:   'Chapter 2 Title'
       },
       {
         jsonUrl: 'https://cdn.jsdelivr.net/gh/YOUR-USER/YOUR-REPO@TAG/path/ch3.json',
-        topic:   'Motion in a Straight Line'
-      },
-      {
-        jsonUrl: 'https://cdn.jsdelivr.net/gh/YOUR-USER/YOUR-REPO@TAG/path/ch4.json',
-        topic:   'Motion in a Plane'
+        topic:   'Chapter 3 Title'
       }
     ],
 
     settings: {
-      title: "NEET Physics — Chapters 1–4",
-      description: "4 chapters · combined MCQ test from GitHub CDN",
-      timer: 40,                      // total minutes for the merged quiz
-      shuffle_questions: true,        // shuffles within each topic section
+      title: "My Multi-Chapter Quiz",
+      description: "3 chapters combined MCQ test",
+      timer: 30,
+      shuffle_questions: true,
       shuffle_options: true,
-      quiz_questions: 40,             // 10 per chapter → numbered 1–10, 11–20 …
+      quiz_questions: 30,
       reload_after: 0,
 
-      // Force section order (topic names or slugs):
+      // Force section order (must match topic names above exactly):
       topic_order: [
-        'Basic Mathematics in Physics',
-        'Units & Measurements',
-        'Motion in a Straight Line',
-        'Motion in a Plane'
+        'Chapter 1 Title',
+        'Chapter 2 Title',
+        'Chapter 3 Title'
       ]
     }
   });
 });
 </script>
-
-
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  METHOD 4 (optional) — Google Drive via Apps Script proxy
-  Only needed when JSON files are on Google Drive and cannot be
-  moved to a public host. jsDelivr / CDN URLs above do NOT need this.
-
-  Setup:
-    1. script.google.com → New Project → paste:
-         function doGet(e) {
-           var file = DriveApp.getFileById(e.parameter.id);
-           return ContentService
-             .createTextOutput(file.getBlob().getDataAsString())
-             .setMimeType(ContentService.MimeType.JSON);
-         }
-    2. Deploy → Web App → "Anyone" access → copy the Web App URL.
-    3. Set it globally once per site (after the engine <script> tag):
-         <script>
-           window.AIMCQ_CONFIG = {
-             appsScriptUrl: 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec'
-           };
-         </script>
-    4. Then use driveFileId / driveFileIds in each quiz block:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
-<!--
-<div id="aimcq-quiz-4"></div>
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-
-  // Single Drive file
-  window.loadAimcqFromDrive('aimcq-quiz-4', {
-    driveFileId: 'YOUR_GOOGLE_DRIVE_FILE_ID',
-    settings: {
-      title: "My Drive Quiz",
-      timer: 10,
-      shuffle_questions: true,
-      shuffle_options: true,
-      quiz_questions: 10
-    }
-  });
-
-  // — OR — Multiple Drive files:
-  // window.loadAimcqFromDrive('aimcq-quiz-4', {
-  //   driveFileIds: [
-  //     { driveFileId: 'FILE_ID_1', topic: 'General Intelligence' },
-  //     { driveFileId: 'FILE_ID_2', topic: 'General Knowledge' },
-  //     { driveFileId: 'FILE_ID_3', topic: 'Quantitative Aptitude' }
-  //   ],
-  //   settings: {
-  //     title: "SSC CGL Tier 1 — Full Mock",
-  //     description: "3 sections · 30 MCQs",
-  //     timer: 30,
-  //     shuffle_questions: true,
-  //     shuffle_options: true,
-  //     quiz_questions: 30,
-  //     topic_order: ['General Intelligence','General Knowledge','Quantitative Aptitude']
-  //   }
-  // });
-});
-</script>
--->
