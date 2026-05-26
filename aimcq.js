@@ -9,39 +9,7 @@
      - KaTeX auto: https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js
      - SMILES:     https://unpkg.com/smiles-drawer@2.0.1/dist/smiles-drawer.min.js
    ============================================================== */
-/* ==================================================================
-   GLOBAL THEME CONFIG  (AIMCQ Engine)
-   ==================================================================
-   Define site-wide settings ONCE here in the theme. Every post/page
-   that loads a quiz from Google Drive will automatically use these
-   values, so you NEVER have to paste the Web App URL into each post.
-
-   appsScriptUrl : The Google Apps Script Web App URL used as a proxy
-                   to fetch Drive JSON files (avoids Drive CORS / the
-                   "download anyway" HTML page).
-
-   HOW TO SET IT UP:
-     1. Go to script.google.com -> New Project, paste:
-
-          function doGet(e) {
-            var id = e.parameter.id;
-            var file = DriveApp.getFileById(id);
-            var content = file.getBlob().getDataAsString();
-            return ContentService.createTextOutput(content)
-                                 .setMimeType(ContentService.MimeType.JSON);
-          }
-
-     2. Deploy -> New deployment -> type "Web app" -> access "Anyone"
-     3. Copy the Web App URL it gives you.
-     4. Paste that URL below, replacing PASTE_YOUR_WEB_APP_URL_HERE.
-
-   Once set, posts only need driveFileId / driveFileIds -- no appsScriptUrl.
-   A post can still override this by passing its own `appsScriptUrl`.
-   ================================================================== */
 window.AIMCQ_CONFIG = window.AIMCQ_CONFIG || {};
-if (!window.AIMCQ_CONFIG.appsScriptUrl) {
-    window.AIMCQ_CONFIG.appsScriptUrl = 'PASTE_YOUR_WEB_APP_URL_HERE';
-}
 
 /* ==================================================================
    MULTI-QUIZ COORDINATION (single page, multiple containers)
@@ -1918,117 +1886,34 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
 };
 
 /* ==================================================================
-   REMOTE QUIZ LOADER  —  window.loadAimcqFromDrive(containerId, opts)
+/* ==================================================================
+   REMOTE QUIZ LOADER  -  window.loadAimcqFromDrive(containerId, opts)
    ==================================================================
-   Supports SINGLE or MULTIPLE JSON files merged into one quiz.
-   The recommended source is any public URL — GitHub + jsDelivr CDN
-   is the easiest: zero CORS issues, global CDN, free, permanent.
+   Loads one or more quiz JSON files from public URLs (jsDelivr, CDN,
+   raw.githubusercontent.com, your own server, etc.) and initialises
+   the quiz engine. Google Drive is not supported.
 
-   ----------------------------------------------------------------
-   METHOD 2 — Single JSON file via public URL (jsDelivr / CDN)
-   ----------------------------------------------------------------
-   Host your quiz JSON on GitHub, push a tag, use the jsDelivr URL:
-
-     https://cdn.jsdelivr.net/gh/USER/REPO@TAG/path/to/quiz.json
-
-   Example:
-
-     window.loadAimcqFromDrive('aimcq-quiz-1', {
-         jsonUrl: 'https://cdn.jsdelivr.net/gh/fvl777/fvl777@main/neetphyjson/CH-1_%20Basic%20Mathematics%20in%20Physics.json',
+   METHOD 2 - Single JSON URL:
+     window.loadAimcqFromDrive('aimcq-quiz-2', {
+         jsonUrl: 'https://cdn.jsdelivr.net/gh/USER/REPO@TAG/quiz.json',
          settings: {
-             title: "NEET Physics — Ch 1: Basic Mathematics",
-             description: "Chapter 1 MCQs",
-             timer: 10,
-             shuffle_questions: true,
-             shuffle_options: true,
-             quiz_questions: 10
+             title: "My Quiz", timer: 10, quiz_questions: 10,
+             shuffle_questions: true, shuffle_options: true
          }
      });
 
-   Any other public URL (raw.githubusercontent.com, your own server,
-   Cloudflare R2, S3, etc.) works identically — just pass the URL.
-
-   ----------------------------------------------------------------
-   METHOD 3 — Multiple JSON files via public URLs (with topic tags)
-   ----------------------------------------------------------------
-   Pass an array via `jsonUrls`. Files are fetched in parallel,
-   their posts & terms are merged, duplicates de-duplicated.
-   Each entry can carry a `topic` that powers the topic-filter tabs,
-   section headings, and per-topic score breakdown on result screen.
-
-     window.loadAimcqFromDrive('aimcq-quiz-1', {
+   METHOD 3 - Multiple JSON URLs merged into one quiz:
+     window.loadAimcqFromDrive('aimcq-quiz-3', {
          jsonUrls: [
-             {
-                 jsonUrl: 'https://cdn.jsdelivr.net/gh/USER/REPO@TAG/physics/ch1.json',
-                 topic: 'Basic Mathematics'
-             },
-             {
-                 jsonUrl: 'https://cdn.jsdelivr.net/gh/USER/REPO@TAG/physics/ch2.json',
-                 topic: 'Units & Measurements'
-             },
-             {
-                 jsonUrl: 'https://cdn.jsdelivr.net/gh/USER/REPO@TAG/physics/ch3.json',
-                 topic: 'Motion in a Straight Line'
-             }
+             { jsonUrl: 'https://.../ch1.json', topic: 'Chapter 1' },
+             { jsonUrl: 'https://.../ch2.json', topic: 'Chapter 2' }
          ],
          settings: {
-             title: "NEET Physics — Chapters 1–3",
-             description: "3 chapters · combined MCQ test",
-             timer: 30,
-             shuffle_questions: true,
-             shuffle_options: true,
-             quiz_questions: 30,
-             topic_order: ['Basic Mathematics', 'Units & Measurements', 'Motion in a Straight Line']
+             title: "Multi-Chapter Quiz", timer: 20, quiz_questions: 20,
+             shuffle_questions: true, shuffle_options: true,
+             topic_order: ['Chapter 1', 'Chapter 2']
          }
      });
-
-   Plain-string form (no per-file topic; falls back to `terms` in each file):
-
-     window.loadAimcqFromDrive('aimcq-quiz-1', {
-         jsonUrls: [
-             'https://cdn.jsdelivr.net/gh/USER/REPO@TAG/quiz-a.json',
-             'https://cdn.jsdelivr.net/gh/USER/REPO@TAG/quiz-b.json'
-         ],
-         settings: { timer: 10, quiz_questions: 20 }
-     });
-
-   ----------------------------------------------------------------
-   METHOD D — Google Drive (via Apps Script proxy for CORS)
-   ----------------------------------------------------------------
-   Only needed when your JSON files live on Google Drive and you
-   cannot move them to a public host. jsDelivr / direct URLs above
-   do NOT need this proxy.
-
-   1. Go to script.google.com → New Project, paste:
-
-        function doGet(e) {
-          var id = e.parameter.id;
-          var file = DriveApp.getFileById(id);
-          var content = file.getBlob().getDataAsString();
-          return ContentService.createTextOutput(content)
-                               .setMimeType(ContentService.MimeType.JSON);
-        }
-
-   2. Deploy → Web App → "Anyone" access → copy the Web App URL.
-   3. Set it globally once (in your site's <head>):
-        window.AIMCQ_CONFIG = { appsScriptUrl: 'YOUR_WEB_APP_URL' };
-   4. Then use driveFileId / driveFileIds in each page's quiz block:
-
-        // Single Drive file
-        window.loadAimcqFromDrive('aimcq-quiz-1', {
-            driveFileId: 'YOUR_GOOGLE_DRIVE_FILE_ID',
-            settings: { timer: 10 }
-        });
-
-        // Multiple Drive files
-        window.loadAimcqFromDrive('aimcq-quiz-1', {
-            driveFileIds: [
-                { driveFileId: 'FILE_ID_1', topic: 'General Intelligence' },
-                { driveFileId: 'FILE_ID_2', topic: 'General Knowledge' }
-            ],
-            settings: { timer: 10, quiz_questions: 20 }
-        });
-
    ================================================================== */
 
 window.loadAimcqFromDrive = function(containerId, opts) {
@@ -2036,65 +1921,23 @@ window.loadAimcqFromDrive = function(containerId, opts) {
     var container = document.getElementById(containerId);
     if (!container) return;
 
-    // ----------------------------------------------------------------
-    // GLOBAL WEB APP URL FALLBACK
-    // If this post did not pass its own `appsScriptUrl`, use the global
-    // one defined in the theme (window.AIMCQ_CONFIG.appsScriptUrl). This
-    // makes the Web App URL available in ALL posts without repeating it.
-    // The placeholder value is ignored so an un-configured theme behaves
-    // exactly as before.
-    // ----------------------------------------------------------------
-    var globalCfg = window.AIMCQ_CONFIG || {};
-    var globalAppsScriptUrl = globalCfg.appsScriptUrl;
-    if (globalAppsScriptUrl === 'PASTE_YOUR_WEB_APP_URL_HERE') {
-        globalAppsScriptUrl = '';
-    }
-    if (!opts.appsScriptUrl && globalAppsScriptUrl) {
-        opts.appsScriptUrl = globalAppsScriptUrl;
-    }
-
-    // Show loading state
     function renderLoading(msg) {
         container.innerHTML = '<div id="aimcq-root-scope"><div class="aq-wrapper">'
             + '<div class="aq-start" style="text-align:center;padding:3rem 2rem;">'
             + '<div class="aq-loader-spinner"></div>'
-            + '<p style="margin-top:1.2rem;font-size:1.05rem;color:#6c757d;">' + (msg || 'Loading quiz data…') + '</p>'
+            + '<p style="margin-top:1.2rem;font-size:1.05rem;color:#6c757d;">' + (msg || 'Loading quiz\u2026') + '</p>'
             + '</div></div></div>';
     }
     function renderSleep() {
         container.innerHTML = '<div id="aimcq-root-scope"><div class="aq-wrapper">'
             + '<div class="aq-start" style="text-align:center;padding:3rem 2rem;">'
-            + '<p style="text-align:center;font-size:2rem;margin-bottom:0.75rem;">😴</p>'
+            + '<p style="text-align:center;font-size:2rem;margin-bottom:0.75rem;">&#128564;</p>'
             + '<p style="text-align:center;color:#343a40;font-weight:bold;font-size:1.15rem;">This quiz is in sleep mode</p>'
-            + '<p style="text-align:center;color:#6c757d;font-size:0.95rem;margin-top:0.5rem;">Please refresh the page or come back after some time.</p>'
+            + '<p style="text-align:center;color:#6c757d;font-size:0.95rem;margin-top:0.5rem;">Please refresh or try again later.</p>'
             + '</div></div></div>';
     }
 
-    // Build a single fetch URL for a given file ID / jsonUrl pair
-    function buildUrl(entry) {
-        // entry can be a plain string (treated as driveFileId) or an object
-        if (typeof entry === 'string') entry = { driveFileId: entry };
-        if (entry.jsonUrl) return entry.jsonUrl;
-        if (entry.driveFileId && opts.appsScriptUrl) {
-            return opts.appsScriptUrl + '?id=' + encodeURIComponent(entry.driveFileId);
-        }
-        if (entry.driveFileId) {
-            return 'https://drive.google.com/uc?id=' + encodeURIComponent(entry.driveFileId) + '&export=download';
-        }
-        return null;
-    }
-
-    // Normalize the caller's options into a list of fetch entries.
-    // Accepts:
-    //   - opts.jsonUrl           (single URL, optional opts.topic)
-    //   - opts.jsonUrls          (array of URLs OR objects {jsonUrl, topic})
-    //   - opts.driveFileId       (single drive file ID, optional opts.topic)
-    //   - opts.driveFileIds      (array of drive file IDs OR objects {driveFileId, topic})
-    //
-    // Each entry can carry a `topic` which is applied to every post loaded from
-    // that file so the engine can group/filter questions by topic in the UI.
-    // `topic` can be a string ("General Intelligence") or an object
-    // ({ name: 'General Intelligence', slug: 'gi' }).
+    /* Build entries list from opts.jsonUrl / opts.jsonUrls */
     var entries = [];
     if (Array.isArray(opts.jsonUrls)) {
         opts.jsonUrls.forEach(function(u) {
@@ -2103,46 +1946,27 @@ window.loadAimcqFromDrive = function(containerId, opts) {
             else entries.push(u);
         });
     }
-    if (Array.isArray(opts.driveFileIds)) {
-        opts.driveFileIds.forEach(function(x) {
-            if (!x) return;
-            if (typeof x === 'string') entries.push({ driveFileId: x });
-            else entries.push(x);
-        });
-    }
     if (opts.jsonUrl) entries.push({ jsonUrl: opts.jsonUrl, topic: opts.topic });
-    if (opts.driveFileId) entries.push({ driveFileId: opts.driveFileId, topic: opts.topic });
 
-    // Slugify a free-text topic name into a stable slug used for matching.
+    if (entries.length === 0) { renderSleep(); return; }
+
     function slugifyTopic(s) {
-        return String(s || '').toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-+|-+$/g, '') || 'topic';
+        return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'topic';
     }
-    // Normalize any topic-ish value into { name, slug }.
     function normalizeTopic(t) {
         if (!t) return null;
         if (typeof t === 'string') return { name: t, slug: slugifyTopic(t) };
         if (typeof t === 'object') {
             var name = t.name || t.label || '';
-            var slug = t.slug || slugifyTopic(name);
-            return name ? { name: name, slug: slug } : null;
+            return name ? { name: name, slug: t.slug || slugifyTopic(name) } : null;
         }
         return null;
     }
 
-    if (entries.length === 0) {
-        renderSleep();
-        return;
-    }
+    renderLoading('Loading quiz data\u2026');
 
-    renderLoading('Loading quiz data…');
-
-    // Fetch a single entry, return a Promise that resolves to parsed data or null on failure.
-    // If the entry carries a `topic`, stamp every post in the returned bundle with
-    // `_aimcq_source_topic = { name, slug }` so the engine can group by topic later.
     function fetchOne(entry) {
-        var url = buildUrl(entry);
+        var url = entry.jsonUrl;
         if (!url) return Promise.resolve(null);
         var sourceTopic = normalizeTopic(entry && entry.topic);
         return fetch(url, { redirect: 'follow' })
@@ -2153,62 +1977,47 @@ window.loadAimcqFromDrive = function(containerId, opts) {
             .then(function(text) {
                 var trimmed = (text || '').trim();
                 if (trimmed.charAt(0) !== '{' && trimmed.charAt(0) !== '[') {
-                    // Drive "download anyway" HTML page or CORS block
-                    throw new Error('CORS_OR_HTML');
+                    throw new Error('Response is not JSON');
                 }
                 var data = JSON.parse(trimmed);
-                // Apply per-source topic to every post (if the caller provided one).
                 if (sourceTopic && data && Array.isArray(data.posts)) {
                     data.posts.forEach(function(p) {
                         if (p && typeof p === 'object' && !p._aimcq_source_topic) {
                             p._aimcq_source_topic = sourceTopic;
                         }
                     });
-                    // Also register the topic as a term so the title / grouping logic can find it.
                     data.terms = Array.isArray(data.terms) ? data.terms : [];
-                    var alreadyIn = data.terms.some(function(t) {
+                    var seen = data.terms.some(function(t) {
                         return t && (t.slug === sourceTopic.slug || t.name === sourceTopic.name);
                     });
-                    if (!alreadyIn) {
+                    if (!seen) {
                         data.terms.push({ taxonomy: 'topic', name: sourceTopic.name, slug: sourceTopic.slug, parent: '' });
                     }
                 }
                 return data;
             })
             .catch(function(err) {
-                if (window.console && console.warn) {
-                    console.warn('[aimcq] Failed to load quiz source:', url, err && err.message);
-                }
+                if (window.console && console.warn) console.warn('[aimcq] Failed to load:', url, err && err.message);
                 return null;
             });
     }
 
-    // Merge multiple quiz JSON bundles into one.
-    // - posts are concatenated (de-duplicated by id where possible)
-    // - terms are concatenated (de-duplicated by slug+taxonomy where possible)
-    // - top-level fields (version, export_type) are taken from the first non-empty source
     function mergeBundles(bundles) {
         var out = { version: '', export_type: '', terms: [], posts: [] };
-        var seenPostIds = {};
-        var seenTermKeys = {};
+        var seenPosts = {}, seenTerms = {};
         bundles.forEach(function(b) {
             if (!b || typeof b !== 'object') return;
             if (!out.version && b.version) out.version = b.version;
             if (!out.export_type && b.export_type) out.export_type = b.export_type;
-
             (b.terms || []).forEach(function(t) {
                 if (!t) return;
-                var key = (t.taxonomy || '') + '::' + (t.slug || t.name || '');
-                if (seenTermKeys[key]) return;
-                seenTermKeys[key] = true;
-                out.terms.push(t);
+                var k = (t.taxonomy || '') + '::' + (t.slug || t.name || '');
+                if (!seenTerms[k]) { seenTerms[k] = true; out.terms.push(t); }
             });
-
             (b.posts || []).forEach(function(p) {
                 if (!p) return;
-                var pid = p.id;
-                if (pid != null && seenPostIds[pid]) return;
-                if (pid != null) seenPostIds[pid] = true;
+                if (p.id != null && seenPosts[p.id]) return;
+                if (p.id != null) seenPosts[p.id] = true;
                 out.posts.push(p);
             });
         });
@@ -2216,26 +2025,13 @@ window.loadAimcqFromDrive = function(containerId, opts) {
     }
 
     Promise.all(entries.map(fetchOne)).then(function(results) {
-        // STRICT loading: every requested file must load successfully. If even
-        // one fails (network error, CORS block, malformed JSON, missing file)
-        // we show sleep mode rather than rendering a partial quiz. This avoids
-        // the confusing case where a 4-section mock test silently becomes a
-        // 3-section quiz because one Drive file was momentarily unreachable.
         var allOk = results.length === entries.length
             && results.every(function(r) { return r && typeof r === 'object'; });
-        if (!allOk) {
-            renderSleep();
-            return;
-        }
-        var merged = (results.length === 1) ? results[0] : mergeBundles(results);
-        if (!merged.posts || merged.posts.length === 0) {
-            renderSleep();
-            return;
-        }
+        if (!allOk) { renderSleep(); return; }
+        var merged = results.length === 1 ? results[0] : mergeBundles(results);
+        if (!merged.posts || merged.posts.length === 0) { renderSleep(); return; }
         container.innerHTML = '';
         container.id = containerId;
         window.initAimcqQuiz(containerId, merged, opts.settings || {});
-    }).catch(function() {
-        renderSleep();
-    });
+    }).catch(function() { renderSleep(); });
 };
