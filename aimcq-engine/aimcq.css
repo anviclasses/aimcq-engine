@@ -932,64 +932,118 @@
 /* Keep legacy overlay hidden too (replaced by scoped overlay) */
 #aimcq-root-scope .aq-nav-overlay { display: none !important; }
 
-/* --- TABLES in content --- */
+/* --- TABLES in content ---
+   Covers all four containers: .aq-q-body, .aq-explanation, .cbt-question-body, .cbt-explanation
+   All !important rules override any inline styles injected by WordPress / question content editors.
+   ------------------------------------------------------------------------------------------------ */
 
-/* Explanation table (unchanged) */
-#aimcq-root-scope .aq-explanation table {
-    display: block; width: 100%; overflow-x: auto;
-    border-collapse: collapse; margin-bottom: 1rem;
-}
-#aimcq-root-scope .aq-explanation th,
-#aimcq-root-scope .aq-explanation td {
-    border: 1px solid var(--aq-border);
-    padding: 0.65rem;
-    text-align: left;
-    font-family: var(--aq-font);
-}
-#aimcq-root-scope .aq-explanation th { background: var(--aq-light); font-weight: 700; }
-
-/* Question body table — full-width, same style as explanation (basic & professional) */
+/* TABLE ELEMENT — override every common inline property */
 #aimcq-root-scope .aq-q-body table,
-#aimcq-root-scope .cbt-question-body table {
-    display: table;
+#aimcq-root-scope .aq-explanation table,
+#aimcq-root-scope .cbt-question-body table,
+#aimcq-root-scope .cbt-explanation table {
+    display: block !important;
     width: 100% !important;
     max-width: 100% !important;
-    overflow-x: auto;
-    border-collapse: collapse;
-    margin-top: 0.5rem;
-    margin-bottom: 1rem;
-    font-family: var(--aq-font);
-    font-size: 1rem;
-    border: 1px solid var(--aq-border);
+    min-width: 0 !important;
+    height: auto !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    border: 1px solid var(--aq-border) !important;
+    margin-top: 0.5rem !important;
+    margin-bottom: 1rem !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding: 0 !important;
+    font-family: var(--aq-font) !important;
+    font-size: 1rem !important;
+    line-height: 1.5 !important;
+    background: transparent !important;
+    color: var(--aq-dark) !important;
+    float: none !important;
+    position: static !important;
+    table-layout: auto !important;
+    box-sizing: border-box !important;
 }
+
+/* COLGROUP / COL — strip any fixed widths */
+#aimcq-root-scope .aq-q-body col,
+#aimcq-root-scope .aq-explanation col,
+#aimcq-root-scope .cbt-question-body col,
+#aimcq-root-scope .cbt-explanation col {
+    width: auto !important;
+}
+
+/* TH & TD — override every common inline property */
 #aimcq-root-scope .aq-q-body th,
 #aimcq-root-scope .aq-q-body td,
+#aimcq-root-scope .aq-explanation th,
+#aimcq-root-scope .aq-explanation td,
 #aimcq-root-scope .cbt-question-body th,
-#aimcq-root-scope .cbt-question-body td {
-    border: 1px solid var(--aq-border);
-    padding: 0.65rem 0.75rem;
-    text-align: left;
-    vertical-align: middle;
-    font-family: var(--aq-font);
-    line-height: 1.5;
-    word-break: break-word;
+#aimcq-root-scope .cbt-question-body td,
+#aimcq-root-scope .cbt-explanation th,
+#aimcq-root-scope .cbt-explanation td {
+    border: 1px solid var(--aq-border) !important;
+    padding: 0.65rem 0.75rem !important;
+    text-align: left !important;
+    vertical-align: middle !important;
+    font-family: var(--aq-font) !important;
+    font-size: 1rem !important;
+    font-weight: normal !important;
+    line-height: 1.5 !important;
+    color: var(--aq-dark) !important;
+    background: transparent !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
 }
+
+/* TH — header cell overrides */
 #aimcq-root-scope .aq-q-body th,
-#aimcq-root-scope .cbt-question-body th {
-    background: var(--aq-light);
-    font-weight: 700;
-    color: var(--aq-dark);
+#aimcq-root-scope .aq-explanation th,
+#aimcq-root-scope .cbt-question-body th,
+#aimcq-root-scope .cbt-explanation th {
+    background: var(--aq-light) !important;
+    font-weight: 700 !important;
+    color: var(--aq-dark) !important;
 }
-#aimcq-root-scope .aq-q-body tr:nth-child(even),
-#aimcq-root-scope .cbt-question-body tr:nth-child(even) {
-    background: rgba(0, 0, 0, 0.02);
+
+/* Zebra striping — even rows */
+#aimcq-root-scope .aq-q-body tbody tr:nth-child(even),
+#aimcq-root-scope .aq-explanation tbody tr:nth-child(even),
+#aimcq-root-scope .cbt-question-body tbody tr:nth-child(even),
+#aimcq-root-scope .cbt-explanation tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.025) !important;
 }
-/* Responsive: allow horizontal scroll on small screens */
-#aimcq-root-scope .aq-q-body table,
-#aimcq-root-scope .cbt-question-body table {
-    display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+
+/* THEAD / TBODY / TFOOT / TR — strip any inline background/height/spacing */
+#aimcq-root-scope .aq-q-body thead,
+#aimcq-root-scope .aq-q-body tbody,
+#aimcq-root-scope .aq-q-body tfoot,
+#aimcq-root-scope .aq-q-body tr,
+#aimcq-root-scope .aq-explanation thead,
+#aimcq-root-scope .aq-explanation tbody,
+#aimcq-root-scope .aq-explanation tfoot,
+#aimcq-root-scope .aq-explanation tr,
+#aimcq-root-scope .cbt-question-body thead,
+#aimcq-root-scope .cbt-question-body tbody,
+#aimcq-root-scope .cbt-question-body tfoot,
+#aimcq-root-scope .cbt-question-body tr,
+#aimcq-root-scope .cbt-explanation thead,
+#aimcq-root-scope .cbt-explanation tbody,
+#aimcq-root-scope .cbt-explanation tfoot,
+#aimcq-root-scope .cbt-explanation tr {
+    background: transparent !important;
+    height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
 }
 
 /* --- KATEX overflow --- */
