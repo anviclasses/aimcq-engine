@@ -108,10 +108,10 @@
     list-style: inherit !important;
     list-style-type: inherit !important;
     display: list-item !important;
-    padding-left: 0.4rem !important;
+    padding-left: 0.1rem !important;
     margin-left: 0 !important;
-    margin-bottom: 0.45em !important;
-    line-height: 1.65 !important;
+    margin-bottom: 0.35em !important;
+    line-height: 1.50 !important;
 }
 #aimcq-root-scope .aq-q-body ol li::before,
 #aimcq-root-scope .aq-q-body ol li::after,
