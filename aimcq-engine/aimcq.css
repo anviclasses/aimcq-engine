@@ -959,7 +959,7 @@
     padding: 0 !important;
     font-family: var(--aq-font) !important;
     font-size: 1rem !important;
-    line-height: 1.5 !important;
+    line-height: 1.6 !important;
     background: transparent !important;
     color: var(--aq-dark) !important;
     float: none !important;
@@ -986,22 +986,46 @@
 #aimcq-root-scope .cbt-explanation th,
 #aimcq-root-scope .cbt-explanation td {
     border: 1px solid var(--aq-border) !important;
-    padding: 0.65rem 0.75rem !important;
+    padding: 0.7rem 0.9rem !important;
     text-align: left !important;
-    vertical-align: middle !important;
+    vertical-align: top !important;
     font-family: var(--aq-font) !important;
-    font-size: 1rem !important;
+    font-size: 0.97rem !important;
     font-weight: normal !important;
-    line-height: 1.5 !important;
+    line-height: 1.6 !important;
     color: var(--aq-dark) !important;
     background: transparent !important;
     width: auto !important;
     height: auto !important;
-    min-width: 0 !important;
+    min-width: 80px !important;
     max-width: none !important;
     white-space: normal !important;
-    word-break: break-word !important;
-    overflow-wrap: break-word !important;
+    word-break: normal !important;
+    word-wrap: normal !important;
+    overflow-wrap: normal !important;
+    hyphens: none !important;
+}
+
+/* First two columns (label/status columns) — never break short words */
+#aimcq-root-scope .aq-q-body th:first-child,
+#aimcq-root-scope .aq-q-body td:first-child,
+#aimcq-root-scope .aq-q-body th:nth-child(2),
+#aimcq-root-scope .aq-q-body td:nth-child(2),
+#aimcq-root-scope .aq-explanation th:first-child,
+#aimcq-root-scope .aq-explanation td:first-child,
+#aimcq-root-scope .aq-explanation th:nth-child(2),
+#aimcq-root-scope .aq-explanation td:nth-child(2),
+#aimcq-root-scope .cbt-question-body th:first-child,
+#aimcq-root-scope .cbt-question-body td:first-child,
+#aimcq-root-scope .cbt-question-body th:nth-child(2),
+#aimcq-root-scope .cbt-question-body td:nth-child(2),
+#aimcq-root-scope .cbt-explanation th:first-child,
+#aimcq-root-scope .cbt-explanation td:first-child,
+#aimcq-root-scope .cbt-explanation th:nth-child(2),
+#aimcq-root-scope .cbt-explanation td:nth-child(2) {
+    white-space: nowrap !important;
+    min-width: 90px !important;
+    width: 1% !important; /* shrink-wrap to content */
 }
 
 /* TH — header cell overrides */
@@ -1012,6 +1036,7 @@
     background: var(--aq-light) !important;
     font-weight: 700 !important;
     color: var(--aq-dark) !important;
+    vertical-align: middle !important;
 }
 
 /* Zebra striping — even rows */
