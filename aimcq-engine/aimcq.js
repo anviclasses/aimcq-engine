@@ -206,6 +206,32 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
         };
     });
 
+    // Diagnostic: warn (once per missing id) when a question references a
+    // passage that is NOT present in the loaded JSON. The question will still
+    // render, but no passage box can be shown above it. This usually means the
+    // JSON file on GitHub/CDN is an older export that lacks the passage post,
+    // or a stale copy is being served from the CDN cache (for jsDelivr, use a
+    // versioned @tag or purge the cache after updating the file).
+    (function() {
+        var missing = {};
+        questions.forEach(function(q) {
+            if (q.is_passage_question && q.passage_id && !passageData[q.passage_id]) {
+                missing[q.passage_id] = missing[q.passage_id] || [];
+                missing[q.passage_id].push(q.id);
+            }
+        });
+        Object.keys(missing).forEach(function(pid) {
+            if (window.console && console.warn) {
+                console.warn('[aimcq] Questions ' + missing[pid].join(', ')
+                    + ' reference passage id ' + pid
+                    + ' but no post_type:"passage" entry with that id exists in the loaded JSON. '
+                    + 'The passage box cannot be displayed. Check that the JSON file on your '
+                    + 'CDN/GitHub is the latest export (it must contain the passage post), and '
+                    + 'purge or re-version the CDN URL if a stale copy is cached.');
+            }
+        });
+    })();
+
     // Generate a unique fingerprint for this quiz based on question IDs + count.
     // This ensures each post/page stores quiz state independently even when
     // multiple posts reuse the same containerId (e.g. 'aimcq-app-container-unique-quiz-1').
@@ -1075,16 +1101,10 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
                 var titleHi = passageDisplayEl.querySelector('.aq-passage-title-hi');
                 var contentEn = passageDisplayEl.querySelector('.aq-passage-content-en');
                 var contentHi = passageDisplayEl.querySelector('.aq-passage-content-hi');
-                // Only swap to the HI element when one was actually rendered.
-                // Single-language passages (no distinct _aimcq_passage_content_hi)
-                // have no .aq-passage-content-hi node, so hiding the EN node here
-                // would leave the box visible but empty.
-                var showHiTitle   = isHi && !!titleHi;
-                var showHiContent = isHi && !!contentHi;
-                if (titleEn) titleEn.style.display = showHiTitle ? 'none' : 'block';
-                if (titleHi) titleHi.style.display = showHiTitle ? 'block' : 'none';
-                if (contentEn) contentEn.style.display = showHiContent ? 'none' : 'block';
-                if (contentHi) contentHi.style.display = showHiContent ? 'block' : 'none';
+                if (titleEn) titleEn.style.display = isHi ? 'none' : 'block';
+                if (titleHi) titleHi.style.display = isHi ? 'block' : 'none';
+                if (contentEn) contentEn.style.display = isHi ? 'none' : 'block';
+                if (contentHi) contentHi.style.display = isHi ? 'block' : 'none';
                 this.renderMath(passageDisplayEl);
             }
         }
@@ -1725,16 +1745,48 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
                         drift++;
                     }
                     // Trim each topic's groups to its quota, keeping passage groups whole.
+                    //
+                    // FIX (passage starvation): the old first-fit loop walked groups in
+                    // display order and only kept a passage group if the remaining budget
+                    // could hold ALL of its questions at the moment it was reached. With
+                    // passages typically sitting later in the exported JSON, any
+                    // quiz_questions limit smaller than the passage block's end position
+                    // silently dropped the entire passage + its questions ("passage not
+                    // displayed"). We now budget in two phases:
+                    //   Phase 1 - passage groups (in their current order) get first claim
+                    //             on the quota, so reading-comprehension blocks survive.
+                    //   Phase 2 - single questions fill the remaining budget.
+                    // Final output order is still the original group order, so display
+                    // sequencing / shuffle behaviour is unchanged.
                     topicOrder.forEach(function(ts) {
                         var groups = topicGroups[ts];
                         var cap = quotas[ts];
-                        var kept = [];
                         var count = 0;
-                        for (var gi = 0; gi < groups.length; gi++) {
-                            var g = groups[gi];
-                            if (count + g.length <= cap) { kept.push(g); count += g.length; }
-                            else if (g.length === 1 && count < cap) { kept.push(g); count++; }
-                            if (count >= cap) break;
+                        var keepFlags = {};
+
+                        // Phase 1: reserve budget for passage groups first.
+                        for (var pi = 0; pi < groups.length; pi++) {
+                            if (groups[pi].length > 1 && count + groups[pi].length <= cap) {
+                                keepFlags[pi] = true;
+                                count += groups[pi].length;
+                            }
+                        }
+                        // Phase 2: fill the rest with single questions in order.
+                        for (var si = 0; si < groups.length && count < cap; si++) {
+                            if (!keepFlags[si] && groups[si].length === 1) {
+                                keepFlags[si] = true;
+                                count++;
+                            }
+                        }
+                        // Safety net: if nothing fit (e.g. cap smaller than the only
+                        // passage group), truncate the first group to the cap instead of
+                        // returning an empty topic.
+                        var kept = [];
+                        for (var ki = 0; ki < groups.length; ki++) {
+                            if (keepFlags[ki]) kept.push(groups[ki]);
+                        }
+                        if (kept.length === 0 && groups.length > 0 && cap > 0) {
+                            kept.push(groups[0].slice(0, cap));
                         }
                         topicGroups[ts] = kept;
                     });
@@ -2873,15 +2925,10 @@ window.AIMCQ_PRO = (function () {
         var ht = box.querySelector('.cbt-passage-title-hi');
         var ec = box.querySelector('.cbt-passage-content-en');
         var hc = box.querySelector('.cbt-passage-content-hi');
-        // Only swap to the HI element when one was actually rendered; otherwise a
-        // single-language passage would have its EN node hidden with nothing to
-        // replace it, leaving an empty passage box.
-        var showHiTitle   = isHi && !!ht;
-        var showHiContent = isHi && !!hc;
-        if (et) et.style.display = showHiTitle ? 'none' : 'block';
-        if (ht) ht.style.display = showHiTitle ? 'block' : 'none';
-        if (ec) ec.style.display = showHiContent ? 'none' : 'block';
-        if (hc) hc.style.display = showHiContent ? 'block' : 'none';
+        if (et) et.style.display = isHi ? 'none' : 'block';
+        if (ht) ht.style.display = isHi ? 'block' : 'none';
+        if (ec) ec.style.display = isHi ? 'none' : 'block';
+        if (hc) hc.style.display = isHi ? 'block' : 'none';
         this.renderMath(box);
         this.renderChem(box);
     };
