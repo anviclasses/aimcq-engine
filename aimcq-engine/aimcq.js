@@ -1075,10 +1075,16 @@ window.initAimcqQuiz = function(containerId, rawJSONData, customSettings) {
                 var titleHi = passageDisplayEl.querySelector('.aq-passage-title-hi');
                 var contentEn = passageDisplayEl.querySelector('.aq-passage-content-en');
                 var contentHi = passageDisplayEl.querySelector('.aq-passage-content-hi');
-                if (titleEn) titleEn.style.display = isHi ? 'none' : 'block';
-                if (titleHi) titleHi.style.display = isHi ? 'block' : 'none';
-                if (contentEn) contentEn.style.display = isHi ? 'none' : 'block';
-                if (contentHi) contentHi.style.display = isHi ? 'block' : 'none';
+                // Only swap to the HI element when one was actually rendered.
+                // Single-language passages (no distinct _aimcq_passage_content_hi)
+                // have no .aq-passage-content-hi node, so hiding the EN node here
+                // would leave the box visible but empty.
+                var showHiTitle   = isHi && !!titleHi;
+                var showHiContent = isHi && !!contentHi;
+                if (titleEn) titleEn.style.display = showHiTitle ? 'none' : 'block';
+                if (titleHi) titleHi.style.display = showHiTitle ? 'block' : 'none';
+                if (contentEn) contentEn.style.display = showHiContent ? 'none' : 'block';
+                if (contentHi) contentHi.style.display = showHiContent ? 'block' : 'none';
                 this.renderMath(passageDisplayEl);
             }
         }
@@ -2867,10 +2873,15 @@ window.AIMCQ_PRO = (function () {
         var ht = box.querySelector('.cbt-passage-title-hi');
         var ec = box.querySelector('.cbt-passage-content-en');
         var hc = box.querySelector('.cbt-passage-content-hi');
-        if (et) et.style.display = isHi ? 'none' : 'block';
-        if (ht) ht.style.display = isHi ? 'block' : 'none';
-        if (ec) ec.style.display = isHi ? 'none' : 'block';
-        if (hc) hc.style.display = isHi ? 'block' : 'none';
+        // Only swap to the HI element when one was actually rendered; otherwise a
+        // single-language passage would have its EN node hidden with nothing to
+        // replace it, leaving an empty passage box.
+        var showHiTitle   = isHi && !!ht;
+        var showHiContent = isHi && !!hc;
+        if (et) et.style.display = showHiTitle ? 'none' : 'block';
+        if (ht) ht.style.display = showHiTitle ? 'block' : 'none';
+        if (ec) ec.style.display = showHiContent ? 'none' : 'block';
+        if (hc) hc.style.display = showHiContent ? 'block' : 'none';
         this.renderMath(box);
         this.renderChem(box);
     };
